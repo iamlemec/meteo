@@ -7,10 +7,7 @@
   "variables": {
     "x": {
       "type": "scalar"
-    },
-    "y": {
-      "type": "scalar"
     }
   },
-  "equations": ["x**2 - 3*x + z","y**2 - 3*y + z"]
+  "equations": ["x**2 - 3*x + z"]
 }
