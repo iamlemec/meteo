@@ -1,7 +1,8 @@
+from collections import OrderedDict
+import json
+import numpy as np
 import theano
 import theano.tensor as T
-import json
-from collections import OrderedDict
 
 def split(vec,sizes):
   return T.split(vec,sizes,len(sizes)) if len(sizes) > 1 else [vec]
@@ -58,40 +59,80 @@ class Model:
     self.parjac_fun = theano.function([self.par_vec,self.var_vec],self.par_jac)
     self.varjac_fun = theano.function([self.par_vec,self.var_vec],self.var_jac)
 
-  def homotopy(self,par_start,par_finish,var_start,path_str='(1.0-t)*start+t*finish',delt=0.01,max_rep=1000):
+    # newtonian path
     t = T.dscalar('t')
-    path = eval(path_str,{},{'start':par_start,'finish':par_finish,'t':t})
+    start = T.dvector('start')
+    finish = T.dvector('finish')
+    path = (1.0-t)*start + t*finish
     dpath = T.jacobian(path,t)
-    path_fun = theano.function([t],path)
-    dpath_fun = theano.function([t],dpath)
+    self.path_fun = theano.function([start,finish,t],path)
+    self.dpath_fun = theano.function([start,finish,t],dpath)
 
-    t_path =  [0.0]
+  def homotopy(self,par_start,par_finish,var_start,delt=0.01,eqn_tol=1.0e-8,max_step=1000,max_newton=10):
+    path_apply = lambda t: self.path_fun(par_start,par_finish,t)
+    dpath_apply = lambda t: self.dpath_fun(par_start,par_finish,t)
+
+    print 't = 0.0'
+    print 'par_val = {}'.format(par_start)
+    print 'var_val = {}'.format(var_start)
+    print 'eqn_val = {}'.format(str(self.eqn_fun(par_start,var_start)))
+    print
+
+    t_path = [0.0]
     par_path = [par_start]
     var_path = [var_start]
 
     tv = 0.0
-    var_vec = var_start.copy()
-    for rep in xrange(max_rep):
-      tv += delt
+    var_val = var_start.copy()
+    for rep in xrange(max_step):
+      # elevator increment
+      deltv = np.minimum(1.0-tv,delt)
+      tv += deltv
 
-      par_vec = path_fun(tv)
-      dpath_vec = dpath_fun(tv)
-      varjac_vec = self.varjac_fun(par_vec,var_vec)
-      parjac_vec = self.parjac_fun(par_vec,var_vec)
+      # calculate jacobians
+      par_val = path_apply(tv)
+      dpath_val = dpath_apply(tv)
+      varjac_val = self.varjac_fun(par_val,var_val)
+      parjac_val = self.parjac_fun(par_val,var_val)
 
-      varijac_vec = np.linalg.inv(varjac_vec)
-      vardiff_vec = -np.dot(np.dot(varijac_vec,parjac_vec),dpath_vec)
-      step = delt*vardiff_vec
-      var_vec += step
+      # calculate step
+      varijac_val = np.linalg.inv(varjac_val)
+      vardiff_val = -np.dot(varijac_val,np.dot(parjac_val,dpath_val))
+      step = deltv*vardiff_val
+      var_val += step
 
-      print (tv,par_vec,var_vec)
+      # new function value
+      eqn_val = self.eqn_fun(par_val,var_val)
 
+      # newton steps
+      for i in xrange(max_newton):
+        varjac_val = self.varjac_fun(par_val,var_val)
+        varijac_val = np.linalg.inv(varjac_val)
+        step = -np.dot(varijac_val,eqn_val)
+        var_val += step
+        eqn_val = self.eqn_fun(par_val,var_val)
+        if np.max(eqn_val) <= eqn_tol: break
+
+      # print out
+      print 't = {}'.format(tv)
+      print 'par_val = {}'.format(str(par_val))
+      print 'var_val = {}'.format(str(var_val))
+      print 'eqn_val = {}'.format(str(eqn_val))
+      print
+
+      # store
       t_path.append(tv)
-      par_path.append(par_vec)
-      var_path.append(var_vec)
+      par_path.append(par_val)
+      var_path.append(var_val)
 
+      # if we can't stay on the path
+      if np.max(eqn_val) > eqn_tol:
+        print 'Off the rails.'
+        break
+
+      # break at end
       if tv >= 1.0: break
 
     return (np.array(t_path),np.array(par_path),np.array(var_path))
 
-mod = Model('model.json')
+# mod = Model('model.json')
