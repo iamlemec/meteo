@@ -7,6 +7,10 @@
   "variables": {
     "x": {
       "type": "scalar"
+    },
+    "y": {
+      "type": "function",
+      "derivatives": 1
     }
   },
   "equations": ["x**2 - 3*x + z"]
