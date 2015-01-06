@@ -74,73 +74,6 @@ class Model:
     self.path_fun = theano.function([start,finish,t],path)
     self.dpath_fun = theano.function([start,finish,t],dpath)
 
-  def homotopy_newton(self,par_start,par_finish,var_start,delt=0.01,eqn_tol=1.0e-8,max_step=1000,max_newton=10):
-    path_apply = lambda t: self.path_fun(par_start,par_finish,t)
-    dpath_apply = lambda t: self.dpath_fun(par_start,par_finish,t)
-
-    print 't = 0.0'
-    print 'par_val = {}'.format(par_start)
-    print 'var_val = {}'.format(var_start)
-    print 'eqn_val = {}'.format(str(self.eqn_fun(par_start,var_start)))
-    print
-
-    t_path = [0.0]
-    par_path = [par_start]
-    var_path = [var_start]
-
-    tv = 0.0
-    var_val = var_start.copy()
-    for rep in xrange(max_step):
-      # elevator increment
-      deltv = np.minimum(1.0-tv,delt)
-      tv += deltv
-
-      # calculate jacobians
-      par_val = path_apply(tv)
-      dpath_val = dpath_apply(tv)
-      varjac_val = self.varjac_fun(par_val,var_val)
-      parjac_val = self.parjac_fun(par_val,var_val)
-
-      # calculate step
-      varijac_val = np.linalg.inv(varjac_val)
-      vardiff_val = -np.dot(varijac_val,np.dot(parjac_val,dpath_val))
-      step = deltv*vardiff_val
-      var_val += step
-
-      # new function value
-      eqn_val = self.eqn_fun(par_val,var_val)
-
-      # newton steps
-      for i in xrange(max_newton):
-        varjac_val = self.varjac_fun(par_val,var_val)
-        varijac_val = np.linalg.inv(varjac_val)
-        step = -np.dot(varijac_val,eqn_val)
-        var_val += step
-        eqn_val = self.eqn_fun(par_val,var_val)
-        if np.max(eqn_val) <= eqn_tol: break
-
-      # print out
-      print 't = {}'.format(tv)
-      print 'par_val = {}'.format(str(par_val))
-      print 'var_val = {}'.format(str(var_val))
-      print 'eqn_val = {}'.format(str(eqn_val))
-      print
-
-      # store
-      t_path.append(tv)
-      par_path.append(par_val)
-      var_path.append(var_val)
-
-      # if we can't stay on the path
-      if np.max(eqn_val) > eqn_tol:
-        print 'Off the rails.'
-        break
-
-      # break at end
-      if tv >= 1.0: break
-
-    return (np.array(t_path),np.array(par_path),np.array(var_path))
-
   def homotopy_bde(self,par_start,par_finish,var_start,delt=0.01,eqn_tol=1.0e-8,max_step=1000,max_newton=10,plot=False):
     (par_start,par_finish,var_start) = map(np.array,(par_start,par_finish,var_start))
 
@@ -178,7 +111,8 @@ class Model:
       step_pred *= direc
 
       # this normalization keeps us in sane regions
-      step_pred *= delt*np.abs(np.linalg.det(varjac_val))
+      step_pred *= delt
+      #step_pred *= np.abs(np.linalg.det(varjac_val))
 
       # bound between [0,1] and limit step size
       delt_max = np.minimum(delt,1.0-tv)
@@ -195,7 +129,7 @@ class Model:
       eqn_val = self.eqn_fun(par_val,var_val)
 
       # print out
-      print 'Predictor Step'
+      print 'Predictor Step ({})'.format(rep)
       print 't = {}'.format(tv)
       print 'par_val = {}'.format(str(par_val))
       print 'var_val = {}'.format(str(var_val))
@@ -207,40 +141,30 @@ class Model:
       par_path.append(par_val.copy())
       var_path.append(var_val.copy())
 
-      # newton steps
-      # for i in xrange(max_newton):
-      #   varjac_val = self.varjac_fun(par_val,var_val)
-      #   varijac_val = np.linalg.inv(varjac_val)
-      #   step = -np.dot(varijac_val,eqn_val)
-      #   var_val += step
-      #   eqn_val = self.eqn_fun(par_val,var_val)
-      #   if np.max(np.abs(eqn_val)) <= eqn_tol: break
-
       # projection steps
       tv0 = tv
-      eqn_val0 = eqn_val.copy()
+      var_val0 = var_val.copy()
       for i in xrange(max_newton):
         if tv == 0.0 or tv == 1.0:
           proj_dir = np.r_[np.zeros(self.n_vars),1.0]
         else:
-          #proj_dir = np.r_[np.zeros(self.n_vars),1.0]
           proj_dir = step_pred # project along previous step
-        par_val = path_apply(tv)
+
         dpath_val = dpath_apply(tv)
         varjac_val = self.varjac_fun(par_val,var_val)
         parjac_val = self.parjac_fun(par_val,var_val)
         tdir_val = np.dot(parjac_val,dpath_val)[:,np.newaxis]
+
         fulljac_val = np.hstack([varjac_val,tdir_val])
         projjac_val = np.vstack([fulljac_val,proj_dir])
         step_corr = -np.dot(np.linalg.inv(projjac_val),np.r_[eqn_val,0.0])
 
-        print np.dot(proj_dir,np.r_[eqn_val-eqn_val0,tv-tv0])
-
         tv += step_corr[-1]
+        par_val = path_apply(tv)
         var_val += step_corr[:-1]
         eqn_val = self.eqn_fun(par_val,var_val)
+
         if np.max(np.abs(eqn_val)) <= eqn_tol: break
-      print
 
       # print out
       print 'Corrector Step ({})'.format(i)
@@ -273,3 +197,5 @@ class Model:
     return (t_path,par_path,var_path)
 
 # mod = Model('model.json')
+# (t_path,par_path,var_path) = mod.homotopy_bde([2.0],[1.0],[1.0])
+# (t_path,par_path,var_path) = mod.homotopy_bde([2.0],[3.0],[1.0])
