@@ -1,3 +1,4 @@
+from itertools import chain
 from collections import OrderedDict
 import re
 import json
@@ -5,6 +6,7 @@ import numpy as np
 import theano
 import theano.tensor as T
 
+# utils
 def split(vec,sizes):
   return T.split(vec,sizes,len(sizes)) if len(sizes) > 1 else [vec]
 
@@ -14,44 +16,112 @@ def inv(vec):
   elif vec.ndim == 0 or (vec.ndim == 1 and vec.size == 1):
       return 1.0/vec
 
+def merge(*dlist):
+  return dict(chain(*[d.items() for d in dlist]))
+
 class Model:
   def __init__(self,fname):
+    # parse model specification
     with open(fname,'r') as fid:
       mod = json.load(fid,object_pairs_hook=OrderedDict)
 
-    # parse model specification
-    self.par_names = []
-    self.var_names = []
-
+    # parameters
+    self.par_info = OrderedDict()
     self.par_sizes = []
-    self.var_sizes = []
-
     for (name,spec) in mod['parameters'].items():
-      self.par_names += name
-      if spec.get('type','scalar') == 'scalar':
-        self.par_sizes.append(1)
+      ptype = spec.get('type','scalar')
+      psize = 1 if ptype == 'scalar' else spec['size']
 
+      info = OrderedDict()
+      info['type'] = ptype
+      info['size'] = psize
+
+      self.par_info[name] = info
+      self.par_sizes.append(psize)
+
+    # variables
+    self.var_info = OrderedDict()
+    self.var_sizes = []
     for (name,spec) in mod['variables'].items():
-      self.var_names += name
-      if spec.get('type','scalar') == 'scalar':
-        self.var_sizes.append(1)
+      vtype = spec.get('type','scalar')
+      vsize = 1 if vtype == 'scalar' else spec['size']
 
-    self.n_pars = len(self.par_sizes)
-    self.n_vars = len(self.var_sizes)
+      info = OrderedDict()
+      info['type'] = vtype
+      info['size'] = vsize
+      if vtype == 'function':
+        vder = spec.get('derivatives',0)
+        (tmin,tmax) = spec['range']
+        (tbound,fbound) = spec['boundary']
+        info['nder'] = vder
+        info['min'] = tmin
+        info['max'] = tmax
+        info['tbound'] = tbound
+        info['fbound'] = fbound
+      else:
+        vder = 0
 
-    # input
+      self.var_info[name] = info
+      self.var_sizes.append(vsize)
+      if vder > 0: self.var_sizes += vder*[vsize]
+
+    # totals
+    self.n_pars = len(self.par_info)
+    self.n_vars = len(self.var_info)
+
+    # input vectors
     self.par_vec = T.dvector('parvec')
     self.var_vec = T.dvector('varvec')
 
-    # unpack
-    self.par_dict = dict(zip(self.par_names,split(self.par_vec,self.par_sizes)))
-    self.var_dict = dict(zip(self.var_names,split(self.var_vec,self.var_sizes)))
-    self.sym_dict = dict(self.par_dict.items()+self.var_dict.items())
+    # unpack and map out variables
+    self.par_dict = OrderedDict()
+    piter = iter(split(self.par_vec,self.par_sizes))
+    for (name,info) in self.par_info.items():
+      self.par_dict[name] = piter.next()
+
+    self.var_dict = OrderedDict()
+    self.der_dict = OrderedDict()
+    viter = iter(split(self.var_vec,self.var_sizes))
+    for (name,info) in self.var_info.items():
+      var = viter.next()
+      self.var_dict[name] = var
+      if info['type'] == 'function':
+        self.der_dict[var] = [var] + [viter.next() for d in xrange(info['nder'])]
+
+    # define derivative operator
+    def diff(var,n=1):
+      return self.der_dict[var][n]
+    self.diff_dict = {'diff':diff}
+
+    # combine them all
+    self.sym_dict = merge(self.par_dict,self.var_dict,self.diff_dict)
 
     # evaluate
     self.equations = []
+
+    # regular equations
     for eq in mod['equations']:
       self.equations.append(eval(eq,{},self.sym_dict))
+
+    # derivative relations and boundary condition
+    for (name,info) in self.var_info.items():
+      if info['type'] == 'function':
+        var = self.var_dict[name]
+        size = info['size']
+        (tmin,tmax) = (info['min'],info['max'])
+        (tbound,fbound) = (info['tbound'],info['fbound'])
+
+        grid = np.linspace(tmin,tmax,size)
+        tint = (tbound<=grid).nonzero()[0][-1]
+        tfrac = tbound - grid[tint]
+
+        vbound = (1.0-tfrac)*var[tint:tint+1] + tfrac*var[tint+1:tint+2]
+        self.equations.append(vbound-fbound)
+
+        for d in xrange(info['nder']):
+          d0 = diff(var,d)
+          d1 = diff(var,d+1)
+          self.equations.append(d0[1:]-d0[:-1]-grid[:-1]*d1[:-1])
 
     # repack
     self.eqn_vec = T.join(0,*self.equations)
