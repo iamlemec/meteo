@@ -1,4 +1,5 @@
 from collections import OrderedDict
+import re
 import json
 import numpy as np
 import theano
@@ -74,17 +75,18 @@ class Model:
     self.path_fun = theano.function([start,finish,t],path)
     self.dpath_fun = theano.function([start,finish,t],dpath)
 
-  def homotopy_bde(self,par_start,par_finish,var_start,delt=0.01,eqn_tol=1.0e-8,max_step=1000,max_newton=10,plot=False):
+  def homotopy_bde(self,par_start,par_finish,var_start,delt=0.01,eqn_tol=1.0e-8,max_step=1000,max_newton=10,output=False,plot=False):
     (par_start,par_finish,var_start) = map(np.array,(par_start,par_finish,var_start))
 
     path_apply = lambda t: self.path_fun(par_start,par_finish,t)
     dpath_apply = lambda t: self.dpath_fun(par_start,par_finish,t)
 
-    print 't = 0.0'
-    print 'par_val = {}'.format(par_start)
-    print 'var_val = {}'.format(var_start)
-    print 'eqn_val = {}'.format(str(self.eqn_fun(par_start,var_start)))
-    print
+    if output:
+      print 't = 0.0'
+      print 'par_val = {}'.format(par_start)
+      print 'var_val = {}'.format(var_start)
+      print 'eqn_val = {}'.format(str(self.eqn_fun(par_start,var_start)))
+      print
 
     t_path = [0.0]
     par_path = [par_start]
@@ -128,13 +130,13 @@ class Model:
       par_val = path_apply(tv)
       eqn_val = self.eqn_fun(par_val,var_val)
 
-      # print out
-      print 'Predictor Step ({})'.format(rep)
-      print 't = {}'.format(tv)
-      print 'par_val = {}'.format(str(par_val))
-      print 'var_val = {}'.format(str(var_val))
-      print 'eqn_val = {}'.format(str(eqn_val))
-      print
+      if output:
+        print 'Predictor Step ({})'.format(rep)
+        print 't = {}'.format(tv)
+        print 'par_val = {}'.format(str(par_val))
+        print 'var_val = {}'.format(str(var_val))
+        print 'eqn_val = {}'.format(str(eqn_val))
+        print
 
       # store
       t_path.append(tv)
@@ -166,13 +168,13 @@ class Model:
 
         if np.max(np.abs(eqn_val)) <= eqn_tol: break
 
-      # print out
-      print 'Corrector Step ({})'.format(i)
-      print 't = {}'.format(tv)
-      print 'par_val = {}'.format(str(par_val))
-      print 'var_val = {}'.format(str(var_val))
-      print 'eqn_val = {}'.format(str(eqn_val))
-      print
+      if output:
+        print 'Corrector Step ({})'.format(i)
+        print 't = {}'.format(tv)
+        print 'par_val = {}'.format(str(par_val))
+        print 'var_val = {}'.format(str(var_val))
+        print 'eqn_val = {}'.format(str(eqn_val))
+        print
 
       # store
       t_path.append(tv)
@@ -199,3 +201,41 @@ class Model:
 # mod = Model('model.json')
 # (t_path,par_path,var_path) = mod.homotopy_bde([2.0],[1.0],[1.0])
 # (t_path,par_path,var_path) = mod.homotopy_bde([2.0],[3.0],[1.0])
+
+def diff_eq_config(eq,bound,trange,xvar='x',N=32):
+  (tmin,tmax) = trange
+  tgrid = np.linspace(tmin,tmax,N)
+  dgrid = tgrid[1:] - tgrid[:-1]
+
+  dvar = 'dx'
+  def d(v):
+    if v == xvar:
+      return dvar
+
+  eq0 = eq.replace('d({})'.format(xvar),'d'+xvar)
+
+  rvar = r'((?<=[^a-zA-Z]){0:}(?=(\Z|[^a-zA-Z]))|(?<=\A){0:}(?=(\Z|[^a-zA-Z])))'
+  def evali(i):
+    istr = str(i)
+    eqp = eq0
+    (eqp,_) = re.subn(rvar.format(xvar),xvar+istr,eqp)
+    (eqp,_) = re.subn(rvar.format(dvar),dvar+istr,eqp)
+    return eqp
+  eqs = [evali(i) for i in xrange(N)]
+
+  def dsumi(i):
+    istr = str(i)
+    i1str = str(i+1)
+    eqd = xvar+i1str+' - '+xvar+istr+' - '+'dt'+istr+'*'+'dx'+istr
+    return eqd
+  eqds = [dsumi(i) for i in xrange(N-1)]
+
+  (bloc,bval) = bound
+  bmin = (tgrid>bloc).nonzero()[0][0] - 1
+  bfrac = bloc - tgrid[bmin]
+  if bfrac == 0.0:
+    eqb = xvar+str(bmin)+' - '+str(bval)
+  else:
+    eqb = str(1.0-bfrac)+'*'+xvar+str(bmin)+'+'+str(bfrac)+'*'+xvar+str(bmin+1)+' - '+str(bval)
+
+  return (eqs,eqds,eqb)

@@ -1,4 +1,8 @@
 {
+  "constants": {
+    "c": 2.385451,
+    "alpha": 2.0
+  },
   "parameters": {
     "z": {
       "type": "scalar"
