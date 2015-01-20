@@ -53,9 +53,10 @@ class Model:
         vder = spec.get('derivatives',0)
         (tmin,tmax) = spec['range']
         (tbound,fbound) = spec['boundary']
+        grid = np.linspace(tmin,tmax,vsize)
+
         info['nder'] = vder
-        info['min'] = tmin
-        info['max'] = tmax
+        info['grid'] = grid
         info['tbound'] = tbound
         info['fbound'] = fbound
       else:
@@ -86,11 +87,11 @@ class Model:
       var = viter.next()
       self.var_dict[name] = var
       if info['type'] == 'function':
-        self.der_dict[var] = [var] + [viter.next() for d in xrange(info['nder'])]
+        self.der_dict[var] = [viter.next() for d in xrange(info['nder'])]
 
     # define derivative operator
     def diff(var,n=1):
-      return self.der_dict[var][n]
+      return self.der_dict[var][n-1]
     self.diff_dict = {'diff':diff}
 
     # combine them all
@@ -108,13 +109,11 @@ class Model:
       if info['type'] == 'function':
         var = self.var_dict[name]
         size = info['size']
-        (tmin,tmax) = (info['min'],info['max'])
+        grid = info['grid']
         (tbound,fbound) = (info['tbound'],info['fbound'])
 
-        grid = np.linspace(tmin,tmax,size)
         tint = (tbound<=grid).nonzero()[0][-1]
         tfrac = tbound - grid[tint]
-
         vbound = (1.0-tfrac)*var[tint:tint+1] + tfrac*var[tint+1:tint+2]
         self.equations.append(vbound-fbound)
 
@@ -145,8 +144,33 @@ class Model:
     self.path_fun = theano.function([start,finish,t],path)
     self.dpath_fun = theano.function([start,finish,t],dpath)
 
-  def homotopy_bde(self,par_start,par_finish,var_start,delt=0.01,eqn_tol=1.0e-8,max_step=1000,max_newton=10,output=False,plot=False):
-    (par_start,par_finish,var_start) = map(np.array,(par_start,par_finish,var_start))
+  def dict_to_array(self,din,dinfo):
+    vout = []
+    for (var,info) in dinfo.items():
+      val = din[var]
+      if info['type'] == 'scalar':
+        vout += [val]
+      elif info['type'] == 'vector':
+        vout += val
+      elif info['type'] == 'function':
+        if info['nder'] == 0:
+          vout += val
+        else:
+          vout += np.concatenate(*val)
+    return np.array(vout)
+
+  def array_to_dict(self,vin,dinfo):
+    dout = OrderedDict()
+    viter = iter(vin)
+    for (var,info) in dinfo.item(s):
+      nder = info['nder']
+      size = info['size']
+      dout[var] = [np.array(viter.islice(viter,size)) for i in xrange(nder+1)]
+
+  def homotopy_bde(self,par_start_dict,par_finish_dict,var_start_dict,delt=0.01,eqn_tol=1.0e-8,max_step=1000,max_newton=10,output=False,plot=False):
+    par_start = self.dict_to_array(par_start_dict,self.par_info)
+    par_finish = self.dict_to_array(par_finish_dict,self.par_info)
+    var_start = self.dict_to_array(var_start_dict,self.var_info)
 
     path_apply = lambda t: self.path_fun(par_start,par_finish,t)
     dpath_apply = lambda t: self.dpath_fun(par_start,par_finish,t)
@@ -268,10 +292,6 @@ class Model:
 
     return (t_path,par_path,var_path)
 
-# mod = Model('model.json')
-# (t_path,par_path,var_path) = mod.homotopy_bde([2.0],[1.0],[1.0])
-# (t_path,par_path,var_path) = mod.homotopy_bde([2.0],[3.0],[1.0])
-
 def diff_eq_config(eq,bound,trange,xvar='x',N=32):
   (tmin,tmax) = trange
   tgrid = np.linspace(tmin,tmax,N)
@@ -309,3 +329,9 @@ def diff_eq_config(eq,bound,trange,xvar='x',N=32):
     eqb = str(1.0-bfrac)+'*'+xvar+str(bmin)+'+'+str(bfrac)+'*'+xvar+str(bmin+1)+' - '+str(bval)
 
   return (eqs,eqds,eqb)
+
+
+# Usage
+# mod = Model('model.json')
+# (t_path,par_path,var_path) = mod.homotopy_bde({"z": 2.0},{"z": 1.0},{"x": 1.0})
+# (t_path,par_path,var_path) = mod.homotopy_bde({"z": 2.0},{"z": 3.0},{"x": 1.0})
