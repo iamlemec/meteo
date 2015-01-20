@@ -1,0 +1,17 @@
+{
+  "parameters": {
+    "alpha": {
+      "type": "scalar"
+    }
+  },
+  "variables": {
+    "x": {
+      "type": "function",
+      "derivatives": 1,
+      "range": [0.0,1.0],
+      "boundary": [0.0,1.0],
+      "size": 16
+    }
+  },
+  "equations": ["diff(x) - alpha*x"]
+}
