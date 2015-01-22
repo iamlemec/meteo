@@ -148,12 +148,13 @@ class Model:
     vout = []
     for (var,info) in dinfo.items():
       val = din[var]
-      if info['type'] == 'scalar':
+      vtype = info['type']
+      if vtype == 'scalar':
         vout += [val]
-      elif info['type'] == 'vector':
+      elif vtype == 'vector':
         vout += val
-      elif info['type'] == 'function':
-        if info['nder'] == 0:
+      elif vtype == 'function':
+        if info.get('nder',0) == 0:
           vout += val
         else:
           vout += np.concatenate(*val)
@@ -163,9 +164,19 @@ class Model:
     dout = OrderedDict()
     viter = iter(vin)
     for (var,info) in dinfo.item(s):
-      nder = info['nder']
+      vtype = info['type']
       size = info['size']
-      dout[var] = [np.array(viter.islice(viter,size)) for i in xrange(nder+1)]
+      if vtype == 'scalar':
+        dout[var] = viter.next()
+      elif vtype == 'vector':
+        dout[var] = np.array(islice(viter,size))
+      if vtype == 'function':
+        nder = info.get('nder',0)
+        if nder == 0:
+          dout[var] = np.array(islice(viter,size))
+        else:
+          dout[var] = [np.array(islice(viter,size)) for i in xrange(nder+1)]
+    return dout
 
   def homotopy_bde(self,par_start_dict,par_finish_dict,var_start_dict,delt=0.01,eqn_tol=1.0e-8,max_step=1000,max_newton=10,output=False,plot=False):
     par_start = self.dict_to_array(par_start_dict,self.par_info)
