@@ -32,7 +32,7 @@ def row_dets(mat):
       i = np1 - lw
       ik = i + 1
       dets[i] = -np.dot(qr[i,ik:np1],dets[ik:np1])/qr[i,i]
-  # dets *= np.abs(np.linalg.det(mat[:,:-1])) # to get the scale exactly
+  # dets *= np.abs(np.prod(np.diag(qr))) # to get the scale exactly
   return dets
 
 class Model:
