@@ -1,4 +1,4 @@
-from itertools import chain
+from itertools import chain, islice
 from collections import OrderedDict
 import re
 import json
@@ -10,6 +10,9 @@ import theano.tensor as T
 def split(vec,sizes):
   return T.split(vec,sizes,len(sizes)) if len(sizes) > 1 else [vec]
 
+def ensure_vector(x):
+  return T.stack(x) if x.type.ndim == 0 else x
+
 def inv(vec):
   if vec.ndim == 2:
     return np.linalg.inv(vec)
@@ -18,6 +21,19 @@ def inv(vec):
 
 def merge(*dlist):
   return dict(chain(*[d.items() for d in dlist]))
+
+# HOMPACK90 STYLE
+def row_dets(mat):
+  (n,np1) = mat.shape
+  qr = np.linalg.qr(mat,'r')
+  dets = np.zeros(np1)
+  dets[np1-1] = 1.0
+  for lw in xrange(2,np1+1):
+      i = np1 - lw
+      ik = i + 1
+      dets[i] = -np.dot(qr[i,ik:np1],dets[ik:np1])/qr[i,i]
+  # dets *= np.abs(np.linalg.det(mat[:,:-1])) # to get the scale exactly
+  return dets
 
 class Model:
   def __init__(self,fname):
@@ -53,7 +69,7 @@ class Model:
         vder = spec.get('derivatives',0)
         (tmin,tmax) = spec['range']
         (tbound,fbound) = spec['boundary']
-        grid = np.linspace(tmin,tmax,vsize)
+        grid = np.linspace(tmin,tmax,vsize+1)[:-1]
 
         info['nder'] = vder
         info['grid'] = grid
@@ -70,6 +86,9 @@ class Model:
     self.n_pars = len(self.par_info)
     self.n_vars = len(self.var_info)
 
+    self.sz_pars = np.sum(self.par_sizes)
+    self.sz_vars = np.sum(self.var_sizes)
+
     # input vectors
     self.par_vec = T.dvector('parvec')
     self.var_vec = T.dvector('varvec')
@@ -78,20 +97,34 @@ class Model:
     self.par_dict = OrderedDict()
     piter = iter(split(self.par_vec,self.par_sizes))
     for (name,info) in self.par_info.items():
-      self.par_dict[name] = piter.next()
+      ptype = info['type']
+      par = piter.next()
+      if ptype == 'scalar':
+        self.par_dict[name] = par[0]
+      else:
+        self.par_dict[name] = par
 
     self.var_dict = OrderedDict()
     self.der_dict = OrderedDict()
     viter = iter(split(self.var_vec,self.var_sizes))
     for (name,info) in self.var_info.items():
       var = viter.next()
-      self.var_dict[name] = var
-      if info['type'] == 'function':
-        self.der_dict[var] = [viter.next() for d in xrange(info['nder'])]
+      vtype = info['type']
+      if vtype == 'scalar':
+        self.var_dict[name] = var[0]
+      elif vtype == 'vector':
+        self.var_dict[name] = var
+      elif vtype == 'function':
+        self.var_dict[name] = var
+        nder = info.get('nder',0)
+        if nder > 0: self.der_dict[var] = list(islice(viter,nder))
 
     # define derivative operator
     def diff(var,n=1):
-      return self.der_dict[var][n-1]
+      if n == 0:
+        return var
+      elif n > 0:
+        return self.der_dict[var][n-1]
     self.diff_dict = {'diff':diff}
 
     # combine them all
@@ -112,18 +145,22 @@ class Model:
         grid = info['grid']
         (tbound,fbound) = (info['tbound'],info['fbound'])
 
-        tint = (tbound<=grid).nonzero()[0][-1]
+        # boundary condition
+        tint = (tbound>=grid).nonzero()[0][-1]
         tfrac = tbound - grid[tint]
         vbound = (1.0-tfrac)*var[tint:tint+1] + tfrac*var[tint+1:tint+2]
         self.equations.append(vbound-fbound)
 
-        for d in xrange(info['nder']):
+        # derivative relations
+        nder = info.get('nder',0)
+        dgrid = grid[1:] - grid[:-1]
+        for d in xrange(nder):
           d0 = diff(var,d)
           d1 = diff(var,d+1)
-          self.equations.append(d0[1:]-d0[:-1]-grid[:-1]*d1[:-1])
+          self.equations.append(d0[1:]-d0[:-1]-dgrid*d1[:-1])
 
     # repack
-    self.eqn_vec = T.join(0,*self.equations)
+    self.eqn_vec = T.join(0,*map(ensure_vector,self.equations))
 
     # jacobians
     self.par_jac = T.jacobian(self.eqn_vec,self.par_vec)
@@ -152,30 +189,30 @@ class Model:
       if vtype == 'scalar':
         vout += [val]
       elif vtype == 'vector':
-        vout += val
+        vout += list(val)
       elif vtype == 'function':
         if info.get('nder',0) == 0:
-          vout += val
+          vout += list(val)
         else:
-          vout += np.concatenate(*val)
+          vout += list(np.concatenate(val))
     return np.array(vout)
 
-  def array_to_dict(self,vin,dinfo):
+  def array_to_dict(self,vin,dinfo,sizes):
     dout = OrderedDict()
-    viter = iter(vin)
-    for (var,info) in dinfo.item(s):
+    viter = iter(np.split(vin,np.cumsum(sizes)))
+    for (var,info) in dinfo.items():
       vtype = info['type']
       size = info['size']
       if vtype == 'scalar':
-        dout[var] = viter.next()
+        dout[var] = viter.next()[0]
       elif vtype == 'vector':
-        dout[var] = np.array(islice(viter,size))
+        dout[var] = viter.next()
       if vtype == 'function':
         nder = info.get('nder',0)
         if nder == 0:
-          dout[var] = np.array(islice(viter,size))
+          dout[var] = viter.next()
         else:
-          dout[var] = [np.array(islice(viter,size)) for i in xrange(nder+1)]
+          dout[var] = list(islice(viter,nder+1))
     return dout
 
   def homotopy_bde(self,par_start_dict,par_finish_dict,var_start_dict,delt=0.01,eqn_tol=1.0e-8,max_step=1000,max_newton=10,output=False,plot=False):
@@ -210,8 +247,7 @@ class Model:
       # calculate steps
       tdir_val = np.dot(parjac_val,dpath_val)[:,np.newaxis]
       fulljac_val = np.hstack([varjac_val,tdir_val])
-      jac_dets = np.array([np.linalg.det(fulljac_val.compress(np.arange(self.n_vars+1)!=i,axis=1)) for i in xrange(self.n_vars+1)])
-      step_pred = jac_dets*(-np.ones(self.n_vars+1))**np.arange(self.n_vars+1)
+      step_pred = row_dets(fulljac_val)
 
       # move in the right direction
       if direc is None: direc = np.sign(step_pred[-1])
@@ -219,7 +255,6 @@ class Model:
 
       # this normalization keeps us in sane regions
       step_pred *= delt
-      #step_pred *= np.abs(np.linalg.det(varjac_val))
 
       # bound between [0,1] and limit step size
       delt_max = np.minimum(delt,1.0-tv)
@@ -253,7 +288,7 @@ class Model:
       var_val0 = var_val.copy()
       for i in xrange(max_newton):
         if tv == 0.0 or tv == 1.0:
-          proj_dir = np.r_[np.zeros(self.n_vars),1.0]
+          proj_dir = np.r_[np.zeros(self.sz_vars),1.0]
         else:
           proj_dir = step_pred # project along previous step
 
@@ -264,7 +299,7 @@ class Model:
 
         fulljac_val = np.hstack([varjac_val,tdir_val])
         projjac_val = np.vstack([fulljac_val,proj_dir])
-        step_corr = -np.dot(np.linalg.inv(projjac_val),np.r_[eqn_val,0.0])
+        step_corr = -np.linalg.solve(projjac_val,np.r_[eqn_val,0.0])
 
         tv += step_corr[-1]
         par_val = path_apply(tv)

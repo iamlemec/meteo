@@ -7,8 +7,6 @@ TODO
 ----
 
 + Don't invert matrices
-+ Vectors and functions
-+ Derivatives (differential equations)
-+ Boundary conditions
++ Improve discretization, Runge-Kutta maybe?
 + Regularization and perturbation
 + Sparsity detection
