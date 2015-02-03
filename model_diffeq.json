@@ -12,7 +12,7 @@
       "derivatives": 1,
       "range": [0.0,1.0],
       "boundary": [0.0,1.0],
-      "size": 128
+      "size": 256
     }
   },
   "equations": ["diff(x) - alpha*x"]

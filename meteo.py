@@ -158,13 +158,13 @@ class Model:
         vbound = (1.0-tfrac)*var[tint:tint+1] + tfrac*var[tint+1:tint+2]
         self.equations.append(vbound-fbound)
 
-        # derivative relations
+        # derivative relations - symmetric except at 0
         nder = info.get('nder',0)
-        dgrid = grid[1:] - grid[:-1]
         for d in xrange(nder):
           d0 = diff(var,d)
           d1 = diff(var,d+1)
-          self.equations.append(d0[1:]-d0[:-1]-dgrid*d1[:-1])
+          self.equations.append(d0[1]-d0[0]-(grid[1]-grid[0])*d1[0])
+          self.equations.append((d0[2:]-d0[:-2])-(grid[2:]-grid[:-2])*d1[1:-1])
 
     # repack
     self.eqn_vec = T.join(0,*map(ensure_vector,self.equations))
@@ -222,7 +222,7 @@ class Model:
           dout[var] = list(islice(viter,nder+1))
     return dout
 
-  def homotopy_bde(self,par_start_dict,par_finish_dict,var_start_dict,delt=0.01,eqn_tol=1.0e-8,max_step=1000,max_newton=10,output=False,plot=False):
+  def homotopy_bde(self,par_start_dict,par_finish_dict,var_start_dict,delt=0.01,eqn_tol=1.0e-12,max_step=1000,max_newton=10,output=False,plot=False):
     par_start = self.dict_to_array(par_start_dict,self.par_info)
     par_finish = self.dict_to_array(par_finish_dict,self.par_info)
     var_start = self.dict_to_array(var_start_dict,self.var_info)
