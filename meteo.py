@@ -32,7 +32,7 @@ def row_dets(mat):
       i = np1 - lw
       ik = i + 1
       dets[i] = -np.dot(qr[i,ik:np1],dets[ik:np1])/qr[i,i]
-  # dets *= np.abs(np.prod(np.diag(qr))) # to get the scale exactly
+  dets *= np.prod(np.diag(qr)) # to get the scale exactly
   return dets
 
 class Model:
@@ -40,6 +40,13 @@ class Model:
     # parse model specification
     with open(fname,'r') as fid:
       mod = json.load(fid,object_pairs_hook=OrderedDict)
+
+    # constants
+    self.con_dict = OrderedDict()
+    for (name,spec) in mod['constants'].items():
+      ctype = spec.get('type','scalar')
+      value = spec['value']
+      self.con_dict[name] = np.array(value) if ctype == 'vector' else value
 
     # parameters
     self.par_info = OrderedDict()
@@ -128,7 +135,7 @@ class Model:
     self.diff_dict = {'diff':diff}
 
     # combine them all
-    self.sym_dict = merge(self.par_dict,self.var_dict,self.diff_dict)
+    self.sym_dict = merge(self.con_dict,self.par_dict,self.var_dict,self.diff_dict)
 
     # evaluate
     self.equations = []
