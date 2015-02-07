@@ -222,6 +222,29 @@ class Model:
           dout[var] = list(islice(viter,nder+1))
     return dout
 
+  # solve system, possibly along projection (otherwise fix t)
+  def solve_system(self,par_dict,var_dict,eqn_tol=1.0e-12,max_rep=100,output=False,plot=False):
+    par_val = self.dict_to_array(par_dict,self.par_info)
+    var_val = self.dict_to_array(var_dict,self.var_info)
+    eqn_val = self.eqn_fun(par_val,var_val)
+
+    for i in xrange(max_rep):
+      varjac_val = self.varjac_fun(par_val,var_val)
+      step = -np.linalg.solve(varjac_val,eqn_val)
+      var_val += step
+      eqn_val = self.eqn_fun(par_val,var_val)
+
+      if np.max(np.abs(eqn_val)) <= eqn_tol: break
+
+    if output:
+      print 'Equation Solved ({})'.format(i)
+      print 'par_val = {}'.format(str(par_val))
+      print 'var_val = {}'.format(str(var_val))
+      print 'eqn_val = {}'.format(str(eqn_val))
+      print
+
+    return var_val
+
   def homotopy_bde(self,par_start_dict,par_finish_dict,var_start_dict,delt=0.01,eqn_tol=1.0e-12,max_step=1000,max_newton=10,output=False,plot=False):
     par_start = self.dict_to_array(par_start_dict,self.par_info)
     par_finish = self.dict_to_array(par_finish_dict,self.par_info)
