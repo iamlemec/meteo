@@ -32,7 +32,7 @@ def row_dets(mat):
       i = np1 - lw
       ik = i + 1
       dets[i] = -np.dot(qr[i,ik:np1],dets[ik:np1])/qr[i,i]
-  # dets *= np.abs(np.prod(np.diag(qr))) # to get the scale exactly
+  dets *= np.prod(np.diag(qr)) # to get the scale exactly
   return dets
 
 class Model:
@@ -40,6 +40,13 @@ class Model:
     # parse model specification
     with open(fname,'r') as fid:
       mod = json.load(fid,object_pairs_hook=OrderedDict)
+
+    # constants
+    self.con_dict = OrderedDict()
+    for (name,spec) in mod['constants'].items():
+      ctype = spec.get('type','scalar')
+      value = spec['value']
+      self.con_dict[name] = np.array(value) if ctype == 'vector' else value
 
     # parameters
     self.par_info = OrderedDict()
@@ -128,7 +135,7 @@ class Model:
     self.diff_dict = {'diff':diff}
 
     # combine them all
-    self.sym_dict = merge(self.par_dict,self.var_dict,self.diff_dict)
+    self.sym_dict = merge(self.con_dict,self.par_dict,self.var_dict,self.diff_dict)
 
     # evaluate
     self.equations = []
@@ -151,13 +158,13 @@ class Model:
         vbound = (1.0-tfrac)*var[tint:tint+1] + tfrac*var[tint+1:tint+2]
         self.equations.append(vbound-fbound)
 
-        # derivative relations
+        # derivative relations - symmetric except at 0
         nder = info.get('nder',0)
-        dgrid = grid[1:] - grid[:-1]
         for d in xrange(nder):
           d0 = diff(var,d)
           d1 = diff(var,d+1)
-          self.equations.append(d0[1:]-d0[:-1]-dgrid*d1[:-1])
+          self.equations.append(d0[1]-d0[0]-(grid[1]-grid[0])*d1[0])
+          self.equations.append((d0[2:]-d0[:-2])-(grid[2:]-grid[:-2])*d1[1:-1])
 
     # repack
     self.eqn_vec = T.join(0,*map(ensure_vector,self.equations))
@@ -215,7 +222,30 @@ class Model:
           dout[var] = list(islice(viter,nder+1))
     return dout
 
-  def homotopy_bde(self,par_start_dict,par_finish_dict,var_start_dict,delt=0.01,eqn_tol=1.0e-8,max_step=1000,max_newton=10,output=False,plot=False):
+  # solve system, possibly along projection (otherwise fix t)
+  def solve_system(self,par_dict,var_dict,eqn_tol=1.0e-12,max_rep=100,output=False,plot=False):
+    par_val = self.dict_to_array(par_dict,self.par_info)
+    var_val = self.dict_to_array(var_dict,self.var_info)
+    eqn_val = self.eqn_fun(par_val,var_val)
+
+    for i in xrange(max_rep):
+      varjac_val = self.varjac_fun(par_val,var_val)
+      step = -np.linalg.solve(varjac_val,eqn_val)
+      var_val += step
+      eqn_val = self.eqn_fun(par_val,var_val)
+
+      if np.max(np.abs(eqn_val)) <= eqn_tol: break
+
+    if output:
+      print 'Equation Solved ({})'.format(i)
+      print 'par_val = {}'.format(str(par_val))
+      print 'var_val = {}'.format(str(var_val))
+      print 'eqn_val = {}'.format(str(eqn_val))
+      print
+
+    return var_val
+
+  def homotopy_bde(self,par_start_dict,par_finish_dict,var_start_dict,delt=0.01,eqn_tol=1.0e-12,max_step=1000,max_newton=10,output=False,plot=False):
     par_start = self.dict_to_array(par_start_dict,self.par_info)
     par_finish = self.dict_to_array(par_finish_dict,self.par_info)
     var_start = self.dict_to_array(var_start_dict,self.var_info)

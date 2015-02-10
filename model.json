@@ -1,7 +1,13 @@
 {
   "constants": {
-    "c": 2.385451,
-    "alpha": 2.0
+    "c": {
+      "type": "scalar",
+      "value": 2.385451
+    },
+    "alpha": {
+      "type": "scalar",
+      "value": 3.0
+    }
   },
   "parameters": {
     "z": {
@@ -13,5 +19,5 @@
       "type": "scalar"
     }
   },
-  "equations": ["x**2 - 3*x + z"]
+  "equations": ["x**2 - alpha*x + z"]
 }
