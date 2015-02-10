@@ -9,11 +9,10 @@
   "variables": {
     "x": {
       "type": "function",
-      "derivatives": 1,
+      "deriv": 1,
       "range": [0.0,1.0],
-      "boundary": [0.0,1.0],
       "size": 256
     }
   },
-  "equations": ["diff(x) - alpha*x"]
+  "equations": ["diff(x) - alpha*x","x[0]-1.0"]
 }

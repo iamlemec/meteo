@@ -73,15 +73,14 @@ class Model:
       info['type'] = vtype
       info['size'] = vsize
       if vtype == 'function':
-        vder = spec.get('derivatives',0)
+        vder = spec.get('deriv',0)
+        arg = spec.get('arg',None)
         (tmin,tmax) = spec['range']
-        (tbound,fbound) = spec['boundary']
         grid = np.linspace(tmin,tmax,vsize+1)[:-1]
 
         info['nder'] = vder
+        info['arg'] = arg
         info['grid'] = grid
-        info['tbound'] = tbound
-        info['fbound'] = fbound
       else:
         vder = 0
 
@@ -113,6 +112,7 @@ class Model:
 
     self.var_dict = OrderedDict()
     self.der_dict = OrderedDict()
+    self.arg_dict = OrderedDict()
     viter = iter(split(self.var_vec,self.var_sizes))
     for (name,info) in self.var_info.items():
       var = viter.next()
@@ -123,8 +123,8 @@ class Model:
         self.var_dict[name] = var
       elif vtype == 'function':
         self.var_dict[name] = var
-        nder = info.get('nder',0)
-        if nder > 0: self.der_dict[var] = list(islice(viter,nder))
+        if info['nder'] > 0: self.der_dict[var] = list(islice(viter,info['nder']))
+        if info['arg']: self.arg_dict[info['arg']] = info['grid']
 
     # define derivative operator
     def diff(var,n=1):
@@ -135,7 +135,7 @@ class Model:
     self.diff_dict = {'diff':diff}
 
     # combine them all
-    self.sym_dict = merge(self.con_dict,self.par_dict,self.var_dict,self.diff_dict)
+    self.sym_dict = merge(self.con_dict,self.par_dict,self.var_dict,self.diff_dict,self.arg_dict)
 
     # evaluate
     self.equations = []
@@ -144,19 +144,12 @@ class Model:
     for eq in mod['equations']:
       self.equations.append(eval(eq,{},self.sym_dict))
 
-    # derivative relations and boundary condition
+    # derivative relations
     for (name,info) in self.var_info.items():
       if info['type'] == 'function':
         var = self.var_dict[name]
         size = info['size']
         grid = info['grid']
-        (tbound,fbound) = (info['tbound'],info['fbound'])
-
-        # boundary condition
-        tint = (tbound>=grid).nonzero()[0][-1]
-        tfrac = tbound - grid[tint]
-        vbound = (1.0-tfrac)*var[tint:tint+1] + tfrac*var[tint+1:tint+2]
-        self.equations.append(vbound-fbound)
 
         # derivative relations - symmetric except at 0
         nder = info.get('nder',0)
@@ -405,7 +398,6 @@ def diff_eq_config(eq,bound,trange,xvar='x',N=32):
     eqb = str(1.0-bfrac)+'*'+xvar+str(bmin)+'+'+str(bfrac)+'*'+xvar+str(bmin+1)+' - '+str(bval)
 
   return (eqs,eqds,eqb)
-
 
 # Usage
 # mod = Model('model.json')
