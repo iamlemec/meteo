@@ -32,7 +32,7 @@ def row_dets(mat):
       i = np1 - lw
       ik = i + 1
       dets[i] = -np.dot(qr[i,ik:np1],dets[ik:np1])/qr[i,i]
-  dets *= np.prod(np.diag(qr)) # to get the scale exactly
+  #dets *= np.prod(np.diag(qr)) # to get the scale exactly
   return dets
 
 class Model:
@@ -43,10 +43,23 @@ class Model:
 
     # constants
     self.con_dict = OrderedDict()
-    for (name,spec) in mod['constants'].items():
-      ctype = spec.get('type','scalar')
-      value = spec['value']
-      self.con_dict[name] = np.array(value) if ctype == 'vector' else value
+    for (name,value) in mod['constants'].items():
+      self.con_dict[name] = np.array(value) if type(value) is list else value
+
+    # arguments
+    self.arg_info = OrderedDict()
+    self.arg_dict = OrderedDict()
+    for (name,spec) in mod['arguments'].items():
+      asize = spec['size']
+      (amin,amax) = spec['range']
+      agrid = np.linspace(amin,amax,asize)
+
+      info = OrderedDict()
+      info['size'] = asize
+      info['grid'] = agrid
+
+      self.arg_info[name] = info
+      self.arg_dict[name] = agrid
 
     # parameters
     self.par_info = OrderedDict()
@@ -66,24 +79,26 @@ class Model:
     self.var_info = OrderedDict()
     self.var_sizes = []
     for (name,spec) in mod['variables'].items():
-      vtype = spec.get('type','scalar')
-      vsize = 1 if vtype == 'scalar' else spec['size']
+      vtype = spec['type']
 
       info = OrderedDict()
       info['type'] = vtype
-      info['size'] = vsize
-      if vtype == 'function':
-        vder = spec.get('deriv',0)
-        arg = spec.get('arg',None)
-        (tmin,tmax) = spec['range']
-        grid = np.linspace(tmin,tmax,vsize+1)[:-1]
 
-        info['nder'] = vder
-        info['arg'] = arg
-        info['grid'] = grid
-      else:
+      if vtype == 'scalar':
+        vsize = 1
         vder = 0
+      elif vtype == 'vector':
+        vsize = spec['size']
+        vder = 0
+      elif vtype == 'function':
+        vder = spec.get('deriv',0)
+        if vder > 0: info['nder'] = vder
+        arg = spec['arg']
+        info['arg'] = arg
+        ainfo = self.arg_info[arg]
+        vsize = ainfo['size']
 
+      info['size'] = vsize
       self.var_info[name] = info
       self.var_sizes.append(vsize)
       if vder > 0: self.var_sizes += vder*[vsize]
@@ -112,7 +127,6 @@ class Model:
 
     self.var_dict = OrderedDict()
     self.der_dict = OrderedDict()
-    self.arg_dict = OrderedDict()
     viter = iter(split(self.var_vec,self.var_sizes))
     for (name,info) in self.var_info.items():
       var = viter.next()
@@ -123,8 +137,7 @@ class Model:
         self.var_dict[name] = var
       elif vtype == 'function':
         self.var_dict[name] = var
-        if info['nder'] > 0: self.der_dict[var] = list(islice(viter,info['nder']))
-        if info['arg']: self.arg_dict[info['arg']] = info['grid']
+        if info.get('nder',0) > 0: self.der_dict[var] = list(islice(viter,info['nder']))
 
     # define derivative operator
     def diff(var,n=1):
@@ -149,15 +162,17 @@ class Model:
       if info['type'] == 'function':
         var = self.var_dict[name]
         size = info['size']
-        grid = info['grid']
 
         # derivative relations - symmetric except at 0
         nder = info.get('nder',0)
-        for d in xrange(nder):
-          d0 = diff(var,d)
-          d1 = diff(var,d+1)
-          self.equations.append(d0[1]-d0[0]-(grid[1]-grid[0])*d1[0])
-          self.equations.append((d0[2:]-d0[:-2])-(grid[2:]-grid[:-2])*d1[1:-1])
+        if nder > 0:
+          arg = info['arg']
+          grid = self.arg_dict[arg]
+          for d in xrange(nder):
+            d0 = diff(var,d)
+            d1 = diff(var,d+1)
+            self.equations.append(d0[1]-d0[0]-(grid[1]-grid[0])*d1[0])
+            self.equations.append((d0[2:]-d0[:-2])-(grid[2:]-grid[:-2])*d1[1:-1])
 
     # repack
     self.eqn_vec = T.join(0,*map(ensure_vector,self.equations))
@@ -215,6 +230,19 @@ class Model:
           dout[var] = list(islice(viter,nder+1))
     return dout
 
+  def eval_system(self,par_dict,var_dict,output=False):
+    par_val = self.dict_to_array(par_dict,self.par_info)
+    var_val = self.dict_to_array(var_dict,self.var_info)
+    eqn_val = self.eqn_fun(par_val,var_val)
+
+    if output:
+      print 'par_val = {}'.format(str(par_val))
+      print 'var_val = {}'.format(str(var_val))
+      print 'eqn_val = {}'.format(str(eqn_val))
+      print
+
+    return eqn_val
+
   # solve system, possibly along projection (otherwise fix t)
   def solve_system(self,par_dict,var_dict,eqn_tol=1.0e-12,max_rep=100,output=False,plot=False):
     par_val = self.dict_to_array(par_dict,self.par_info)
@@ -231,33 +259,41 @@ class Model:
 
     if output:
       print 'Equation Solved ({})'.format(i)
-      print 'par_val = {}'.format(str(par_val))
-      print 'var_val = {}'.format(str(var_val))
-      print 'eqn_val = {}'.format(str(eqn_val))
+      #print 'par_val = {}'.format(str(par_val))
+      #print 'var_val = {}'.format(str(var_val))
+      #print 'eqn_val = {}'.format(str(eqn_val))
       print
 
-    return var_val
+    return self.array_to_dict(var_val,self.var_info,self.var_sizes)
 
-  def homotopy_bde(self,par_start_dict,par_finish_dict,var_start_dict,delt=0.01,eqn_tol=1.0e-12,max_step=1000,max_newton=10,output=False,plot=False):
+  def homotopy_bde(self,par_start_dict,par_finish_dict,var_start_dict,delt=0.01,eqn_tol=1.0e-12,max_step=1000,max_newton=10,solve=False,output=False,plot=False):
+    # refine initial solution if needed
+    if solve: var_start_dict = self.solve_system(par_start_dict,var_start_dict,output=output)
+
+    # convert to raw arrays
     par_start = self.dict_to_array(par_start_dict,self.par_info)
     par_finish = self.dict_to_array(par_finish_dict,self.par_info)
     var_start = self.dict_to_array(var_start_dict,self.var_info)
 
+    # generate analytic homotopy paths
     path_apply = lambda t: self.path_fun(par_start,par_finish,t)
     dpath_apply = lambda t: self.dpath_fun(par_start,par_finish,t)
 
+    # start path
+    tv = 0.0
+
     if output:
-      print 't = 0.0'
-      print 'par_val = {}'.format(par_start)
-      print 'var_val = {}'.format(var_start)
-      print 'eqn_val = {}'.format(str(self.eqn_fun(par_start,var_start)))
+      print 't = {}'.format(tv)
+      #print 'par_val = {}'.format(par_start)
+      #print 'var_val = {}'.format(var_start)
+      #print 'eqn_val = {}'.format(str(self.eqn_fun(par_start,var_start)))
       print
 
-    t_path = [0.0]
+    # save path
+    t_path = [tv]
     par_path = [par_start]
     var_path = [var_start]
 
-    tv = 0.0
     direc = None
     var_val = var_start.copy()
     for rep in xrange(max_step):
@@ -277,13 +313,18 @@ class Model:
       step_pred *= direc
 
       # this normalization keeps us in sane regions
-      step_pred *= delt
+      #step_pred *= delt
+      step_pred *= delt/np.mean(np.abs(step_pred))
 
       # bound between [0,1] and limit step size
       delt_max = np.minimum(delt,1.0-tv)
       delt_min = np.maximum(-delt,-tv)
       if step_pred[-1] > delt_max: step_pred *= delt_max/step_pred[-1]
       if step_pred[-1] < delt_min: step_pred *= delt_min/step_pred[-1]
+
+      # elevator
+      #step_pred = np.zeros_like(step_pred)
+      #step_pred[-1] = np.minimum(delt,1.0-tv)
 
       # increment
       tv += step_pred[-1]
@@ -296,9 +337,10 @@ class Model:
       if output:
         print 'Predictor Step ({})'.format(rep)
         print 't = {}'.format(tv)
-        print 'par_val = {}'.format(str(par_val))
-        print 'var_val = {}'.format(str(var_val))
-        print 'eqn_val = {}'.format(str(eqn_val))
+        #print 'par_val = {}'.format(str(par_val))
+        #print 'var_val = {}'.format(str(var_val))
+        #print 'eqn_val = {}'.format(str(eqn_val))
+        print 'step_pred = {}'.format(str(step_pred[-1]))
         print
 
       # store
@@ -334,9 +376,9 @@ class Model:
       if output:
         print 'Corrector Step ({})'.format(i)
         print 't = {}'.format(tv)
-        print 'par_val = {}'.format(str(par_val))
-        print 'var_val = {}'.format(str(var_val))
-        print 'eqn_val = {}'.format(str(eqn_val))
+        #print 'par_val = {}'.format(str(par_val))
+        #print 'var_val = {}'.format(str(var_val))
+        #print 'eqn_val = {}'.format(str(eqn_val))
         print
 
       # store

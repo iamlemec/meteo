@@ -1,18 +1,26 @@
 {
   "constants": {
   },
+  "arguments": {
+    "x": {
+      "range": [0.0,1.0],
+      "size": 32
+    }
+  },
   "parameters": {
     "alpha": {
       "type": "scalar"
     }
   },
   "variables": {
-    "x": {
+    "f": {
       "type": "function",
-      "deriv": 1,
-      "range": [0.0,1.0],
-      "size": 256
+      "arg": "x",
+      "deriv": 1
     }
   },
-  "equations": ["diff(x) - alpha*x","x[0]-1.0"]
+  "equations": [
+    "diff(f) - alpha*f",
+    "f[0]-1.0"
+  ]
 }
