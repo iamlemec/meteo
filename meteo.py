@@ -32,6 +32,7 @@ def row_dets(mat):
       i = np1 - lw
       ik = i + 1
       dets[i] = -np.dot(qr[i,ik:np1],dets[ik:np1])/qr[i,i]
+  dets *= np.sign(np.prod(np.diag(qr))) # just for the sign
   #dets *= np.prod(np.diag(qr)) # to get the scale exactly
   return dets
 
