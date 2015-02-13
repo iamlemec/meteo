@@ -9,7 +9,7 @@
   "arguments": {
     "q": {
       "range": [0.0,1.0],
-      "size": 512
+      "size": 256
     }
   },
   "parameters": {
