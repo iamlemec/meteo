@@ -2,14 +2,14 @@
   "constants": {
     "r": 0.05,
     "pi": 0.1,
-    "c": 50.0,
+    "c": 62.0,
     "gamma": 2.0,
     "nu": 1.0
   },
   "arguments": {
     "q": {
       "range": [0.0,1.0],
-      "size": 128
+      "size": 256
     }
   },
   "parameters": {
