@@ -6,6 +6,10 @@ import numpy as np
 import theano
 import theano.tensor as T
 
+op_dict = {
+  'exp': T.exp
+}
+
 # utils
 def split(vec,sizes):
   return T.split(vec,sizes,len(sizes)) if len(sizes) > 1 else [vec]
@@ -148,7 +152,7 @@ class Model:
     self.diff_dict = {'diff':diff}
 
     # combine them all
-    self.sym_dict = merge(self.con_dict,self.par_dict,self.var_dict,self.diff_dict,self.arg_dict)
+    self.sym_dict = merge(op_dict,self.con_dict,self.par_dict,self.var_dict,self.diff_dict,self.arg_dict)
 
     # evaluate
     self.equations = []
