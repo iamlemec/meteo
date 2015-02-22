@@ -271,7 +271,7 @@ class Model:
 
     return self.array_to_dict(var_val,self.var_info,self.var_sizes)
 
-  def homotopy_bde(self,par_start_dict,par_finish_dict,var_start_dict,delt=0.01,eqn_tol=1.0e-12,max_step=1000,max_newton=10,solve=False,output=False,plot=False):
+  def homotopy_bde(self,par_start_dict,par_finish_dict,var_start_dict,delt=0.01,eqn_tol=1.0e-12,max_step=1000,max_newton=10,solve=False,output=False,out_rep=5,plot=False):
     # refine initial solution if needed
     if solve: var_start_dict = self.solve_system(par_start_dict,var_start_dict,output=output)
 
@@ -291,7 +291,7 @@ class Model:
       print 't = {}'.format(tv)
       #print 'par_val = {}'.format(par_start)
       #print 'var_val = {}'.format(var_start)
-      #print 'eqn_val = {}'.format(str(self.eqn_fun(par_start,var_start)))
+      print 'Equation error = {}'.format(np.max(np.abs(self.eqn_fun(par_start,var_start))))
       print
 
     # save path
@@ -339,15 +339,6 @@ class Model:
       par_val = path_apply(tv)
       eqn_val = self.eqn_fun(par_val,var_val)
 
-      if output:
-        print 'Predictor Step ({})'.format(rep)
-        print 't = {}'.format(tv)
-        #print 'par_val = {}'.format(str(par_val))
-        #print 'var_val = {}'.format(str(var_val))
-        #print 'eqn_val = {}'.format(str(eqn_val))
-        print 'step_pred = {}'.format(str(step_pred[-1]))
-        print
-
       # store
       t_path.append(tv)
       par_path.append(par_val.copy())
@@ -378,12 +369,14 @@ class Model:
 
         if np.max(np.abs(eqn_val)) <= eqn_tol: break
 
-      if output:
-        print 'Corrector Step ({})'.format(i)
+      if output and rep%out_rep==0:
+        print 'Iteration = {}'.format(rep)
+        print 'Step predict = {}'.format(step_pred[-1])
+        print 'Correction steps = {}'.format(i)
         print 't = {}'.format(tv)
         #print 'par_val = {}'.format(str(par_val))
         #print 'var_val = {}'.format(str(var_val))
-        #print 'eqn_val = {}'.format(str(eqn_val))
+        print 'Equation error = {}'.format(np.max(np.abs(eqn_val)))
         print
 
       # store
@@ -400,6 +393,11 @@ class Model:
       if tv <= 0.0 or tv >= 1.0: break
 
     (t_path,par_path,var_path) = map(np.array,(t_path,par_path,var_path))
+
+    if output:
+      print 'Done at {}!'.format(rep)
+      print 't = {}'.format(tv)
+      print 'Equation error = {}'.format(np.max(np.abs(eqn_val)))
 
     if plot:
       import matplotlib.pylab as plt
