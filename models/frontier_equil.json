@@ -1,10 +1,10 @@
 {
   "constants": {
-    "r": 0.05,
-    "pi": 0.1,
-    "c": 200.0,
-    "gamma": 2.5,
-    "nu": 2.0
+    "delta": 0.05,
+    "c": 500.0,
+    "d": 300.0,
+    "gamma": 2.0,
+    "nu": 1.0
   },
   "arguments": {
     "q": {
@@ -13,7 +13,7 @@
     }
   },
   "parameters": {
-    "tau": {
+    "alpha": {
       "type": "scalar"
     },
     "g": {
@@ -26,18 +26,30 @@
       "arg": "q",
       "deriv": 1
     },
+    "Z": {
+      "type": "function",
+      "arg": "q",
+      "deriv": 1
+    },
     "x": {
+      "type": "function",
+      "arg": "q"
+    },
+    "y": {
       "type": "function",
       "arg": "q"
     },
     "Wbar": {
       "type": "scalar"
-    }  
+    }
   },
   "equations": [
-    "(r-g+tau*(1.0-q**nu))*W-pi*q+c*x**gamma*q-(x-g)*q*diff(W,1)",
+    "(delta-g+alpha*y*(1.0-q**nu))*W-q+c*x**gamma*q-(x-g)*q*diff(W,1)",
     "W[-1]-Wbar",
+    "diff(Z,1)+W*nu*q**(nu-1)",
+    "Z[-1]",
     "gamma*c*x**(gamma-1)-diff(W,1)",
-    "r*Wbar-pi-(gamma-1)*c*(Wbar/(gamma*c))**(gamma/(gamma-1))"
+    "gamma*d*y**(gamma-1)-Z",
+    "delta*Wbar-1-(gamma-1)*c*(Wbar/(gamma*c))**(gamma/(gamma-1))"
   ]
 }
