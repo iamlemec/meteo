@@ -41,7 +41,7 @@ def row_dets(mat):
   return dets
 
 class Model:
-  def __init__(self,fname):
+  def __init__(self,fname,constants={}):
     # parse model specification
     with open(fname,'r') as fid:
       mod = json.load(fid,object_pairs_hook=OrderedDict)
@@ -49,6 +49,7 @@ class Model:
     # constants
     self.con_dict = OrderedDict()
     for (name,value) in mod['constants'].items():
+      if name in constants: value = constants[name]
       self.con_dict[name] = np.array(value) if type(value) is list else value
 
     # arguments

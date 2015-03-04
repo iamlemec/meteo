@@ -5,8 +5,8 @@
     "d": 300.0,
     "gamma": 2.0,
     "nu": 1.0,
-    "Wbar": 0.0,
-    "x0": 0.0
+    "x": 0.0,
+    "y": 0.0
   },
   "arguments": {
     "q": {
@@ -33,21 +33,19 @@
       "arg": "q",
       "deriv": 1
     },
-    "x": {
-      "type": "function",
-      "arg": "q"
+    "Wbar": {
+      "type": "scalar"
     },
-    "y": {
-      "type": "function",
-      "arg": "q"
+    "x0": {
+      "type": "scalar"
     }
   },
   "equations": [
-    "(delta-g+alpha*y*(1.0-q**nu))*W-q+c*x**gamma*q-(x-g)*q*diff(W,1)",
+    "(delta-g+alpha*y*(1.0-q**nu))*W-q+c*((1-alpha)*x0+alpha*x)**gamma*q-(((1-alpha)*x0+alpha*x)-g)*q*diff(W,1)",
     "W[-1]-Wbar",
     "diff(Z,1)+W*nu*q**(nu-1)",
     "Z[-1]",
-    "gamma*c*x**(gamma-1)-diff(W,1)",
-    "gamma*d*y**(gamma-1)-Z"
+    "delta*Wbar-1-(gamma-1)*c*(Wbar/(gamma*c))**(gamma/(gamma-1))",
+    "gamma*c*x0**(gamma-1)-Wbar"
   ]
 }
