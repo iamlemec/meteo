@@ -1,13 +1,13 @@
 {
-  "constants": {
-    "delta": 0.05,
-    "c": 500.0,
-    "d": 300.0,
-    "gamma": 2.0,
-    "nu": 1.0,
-    "Wbar": 0.0,
-    "x0": 0.0
-  },
+  "constants": [
+    "delta",
+    "c",
+    "d",
+    "gamma",
+    "nu",
+    "Wbar",
+    "x0"
+  ],
   "arguments": {
     "q": {
       "range": [0.0,1.0],

@@ -1,11 +1,13 @@
 {
-  "constants": {
-    "delta": 0.05,
-    "c": 500.0,
-    "d": 300.0,
-    "gamma": 2.0,
-    "nu": 1.0
-  },
+  "constants": [
+    "delta",
+    "c",
+    "d",
+    "gamma",
+    "nu",
+    "Wbar",
+    "x0"
+  ],
   "arguments": {
     "q": {
       "range": [0.0,1.0],
@@ -38,9 +40,6 @@
     "y": {
       "type": "function",
       "arg": "q"
-    },
-    "Wbar": {
-      "type": "scalar"
     }
   },
   "equations": [
@@ -49,7 +48,6 @@
     "diff(Z,1)+W*nu*q**(nu-1)",
     "Z[-1]",
     "gamma*c*x**(gamma-1)-diff(W,1)",
-    "gamma*d*y**(gamma-1)-Z+(1-q**nu)*W",
-    "delta*Wbar-1-(gamma-1)*c*(Wbar/(gamma*c))**(gamma/(gamma-1))"
+    "gamma*d*y**(gamma-1)-Z+(1-q**nu)*W"
   ]
 }

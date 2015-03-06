@@ -48,8 +48,8 @@ class Model:
 
     # constants
     self.con_dict = OrderedDict()
-    for (name,value) in mod['constants'].items():
-      if name in constants: value = constants[name]
+    for name in mod['constants']:
+      value = constants[name]
       self.con_dict[name] = np.array(value) if type(value) is list else value
 
     # arguments
@@ -386,9 +386,9 @@ class Model:
       var_path.append(var_val.copy())
 
       # if we can't stay on the path
-      # if np.max(np.abs(eqn_val)) > eqn_tol:
-      #   print 'Off the rails.'
-      #   break
+      if (np.max(np.abs(eqn_val)) > eqn_tol) or np.isnan(eqn_val).any():
+        print 'Off the rails.'
+        break
 
       # break at end
       if tv <= 0.0 or tv >= 1.0: break
