@@ -314,23 +314,25 @@ class Model:
       fulljac_val = np.hstack([varjac_val,tdir_val])
       step_pred = row_dets(fulljac_val)
 
-      # move in the right direction
-      if direc is None: direc = np.sign(step_pred[-1])
-      step_pred *= direc
+      if np.mean(np.abs(step_pred)) == 0.0:
+        # elevator step
+        step_pred[:] = np.zeros_like(step_pred)
+        step_pred[-1] = np.minimum(delt,1.0-tv)
+        direc = None
+      else:
+        # move in the right direction
+        if direc is None: direc = np.sign(step_pred[-1])
+        step_pred *= direc
 
-      # this normalization keeps us in sane regions
-      #step_pred *= delt
-      step_pred *= delt/np.mean(np.abs(step_pred))
+        # this normalization keeps us in sane regions
+        #step_pred *= delt
+        step_pred *= delt/np.mean(np.abs(step_pred))
 
-      # bound between [0,1] and limit step size
-      delt_max = np.minimum(delt,1.0-tv)
-      delt_min = np.maximum(-delt,-tv)
-      if step_pred[-1] > delt_max: step_pred *= delt_max/step_pred[-1]
-      if step_pred[-1] < delt_min: step_pred *= delt_min/step_pred[-1]
-
-      # elevator
-      #step_pred = np.zeros_like(step_pred)
-      #step_pred[-1] = np.minimum(delt,1.0-tv)
+        # bound between [0,1] and limit step size
+        delt_max = np.minimum(delt,1.0-tv)
+        delt_min = np.maximum(-delt,-tv)
+        if step_pred[-1] > delt_max: step_pred *= delt_max/step_pred[-1]
+        if step_pred[-1] < delt_min: step_pred *= delt_min/step_pred[-1]
 
       # increment
       tv += step_pred[-1]
