@@ -7,5 +7,6 @@ TODO
 ----
 
 + Improve discretization, Runge-Kutta maybe?
++ Cross-derivatives and discrete dimensions
 + Regularization and perturbation
 + Sparsity detection
