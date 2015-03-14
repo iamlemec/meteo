@@ -4,7 +4,7 @@
     "c",
     "d",
     "gamma",
-    "nu",
+    "beta",
     "Wbar",
     "x0",
     "x",
@@ -34,12 +34,19 @@
       "type": "function",
       "arg": "q",
       "deriv": 1
+    },
+    "F": {
+      "type": "function",
+      "arg": "q",
+      "deriv": 1
     }
   },
   "equations": [
-    "(delta-g+alpha*y*(1.0-q**nu))*W-q+c*((1-alpha)*x0+alpha*x)**gamma*q-(((1-alpha)*x0+alpha*x)-g)*q*diff(W,1)",
+    "(delta-g+alpha*y*(1-F))*W-q+c*((1-alpha)*x0+alpha*x)**gamma*q-(((1-alpha)*x0+alpha*x)-g)*q*diff(W,1)",
     "W[-1]-Wbar",
-    "diff(Z,1)+W*nu*q**(nu-1)",
-    "Z[-1]"
+    "diff(Z,1)+W*diff(F,1)",
+    "Z[-1]",
+    "diff(F,1)-q*(1-q)**(beta-1)*(beta+2)*(beta+1)/2",
+    "F[-1]-1"
   ]
 }
