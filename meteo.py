@@ -409,43 +409,105 @@ class Model:
 
     return (t_path,par_path,var_path)
 
-def diff_eq_config(eq,bound,trange,xvar='x',N=32):
-  (tmin,tmax) = trange
-  tgrid = np.linspace(tmin,tmax,N)
-  dgrid = tgrid[1:] - tgrid[:-1]
+  def homotopy_elev(self,par_start_dict,par_finish_dict,var_start_dict,delt=0.01,eqn_tol=1.0e-12,max_step=1000,max_newton=10,solve=False,output=False,out_rep=5,plot=False):
+    # refine initial solution if needed
+    if solve: var_start_dict = self.solve_system(par_start_dict,var_start_dict,output=output)
 
-  dvar = 'dx'
-  def d(v):
-    if v == xvar:
-      return dvar
+    # convert to raw arrays
+    par_start = self.dict_to_array(par_start_dict,self.par_info)
+    par_finish = self.dict_to_array(par_finish_dict,self.par_info)
+    var_start = self.dict_to_array(var_start_dict,self.var_info)
 
-  eq0 = eq.replace('d({})'.format(xvar),'d'+xvar)
+    # generate analytic homotopy paths
+    path_apply = lambda t: self.path_fun(par_start,par_finish,t)
+    dpath_apply = lambda t: self.dpath_fun(par_start,par_finish,t)
 
-  rvar = r'((?<=[^a-zA-Z]){0:}(?=(\Z|[^a-zA-Z]))|(?<=\A){0:}(?=(\Z|[^a-zA-Z])))'
-  def evali(i):
-    istr = str(i)
-    eqp = eq0
-    (eqp,_) = re.subn(rvar.format(xvar),xvar+istr,eqp)
-    (eqp,_) = re.subn(rvar.format(dvar),dvar+istr,eqp)
-    return eqp
-  eqs = [evali(i) for i in xrange(N)]
+    # start path
+    tv = 0.0
 
-  def dsumi(i):
-    istr = str(i)
-    i1str = str(i+1)
-    eqd = xvar+i1str+' - '+xvar+istr+' - '+'dt'+istr+'*'+'dx'+istr
-    return eqd
-  eqds = [dsumi(i) for i in xrange(N-1)]
+    if output:
+      print 't = {}'.format(tv)
+      #print 'par_val = {}'.format(par_start)
+      #print 'var_val = {}'.format(var_start)
+      print 'Equation error = {}'.format(np.max(np.abs(self.eqn_fun(par_start,var_start))))
+      print
 
-  (bloc,bval) = bound
-  bmin = (tgrid>bloc).nonzero()[0][0] - 1
-  bfrac = bloc - tgrid[bmin]
-  if bfrac == 0.0:
-    eqb = xvar+str(bmin)+' - '+str(bval)
-  else:
-    eqb = str(1.0-bfrac)+'*'+xvar+str(bmin)+'+'+str(bfrac)+'*'+xvar+str(bmin+1)+' - '+str(bval)
+    # save path
+    t_path = [tv]
+    par_path = [par_start]
+    var_path = [var_start]
 
-  return (eqs,eqds,eqb)
+    direc = None
+    var_val = var_start.copy()
+    for rep in xrange(max_step):
+      # calculate jacobians
+      par_val = path_apply(tv)
+      dpath_val = dpath_apply(tv)
+      varjac_val = self.varjac_fun(par_val,var_val)
+      parjac_val = self.parjac_fun(par_val,var_val)
+
+      # calculate steps
+      tdir_val = np.dot(parjac_val,dpath_val)
+      step_pred = -np.linalg.solve(varjac_val,tdir_val)
+
+      # increment
+      delt1 = np.minimum(delt,1.0-tv)
+      tv += delt1
+      var_val += delt1*step_pred
+
+      # new function value
+      par_val = path_apply(tv)
+      eqn_val = self.eqn_fun(par_val,var_val)
+
+      # store
+      t_path.append(tv)
+      par_path.append(par_val.copy())
+      var_path.append(var_val.copy())
+
+      # correction steps
+      for i in xrange(max_newton):
+        varjac_val = self.varjac_fun(par_val,var_val)
+        step_corr = -np.linalg.solve(varjac_val,eqn_val)
+        var_val += step_corr
+        eqn_val = self.eqn_fun(par_val,var_val)
+        if np.max(np.abs(eqn_val)) <= eqn_tol: break
+
+      if output and rep%out_rep==0:
+        print 'Iteration = {}'.format(rep)
+        print 'Step predict = {}'.format(step_pred[-1])
+        print 'Correction steps = {}'.format(i)
+        print 't = {}'.format(tv)
+        #print 'par_val = {}'.format(str(par_val))
+        #print 'var_val = {}'.format(str(var_val))
+        print 'Equation error = {}'.format(np.max(np.abs(eqn_val)))
+        print
+
+      # store
+      t_path.append(tv)
+      par_path.append(par_val.copy())
+      var_path.append(var_val.copy())
+
+      # if we can't stay on the path
+      if (np.max(np.abs(eqn_val)) > eqn_tol) or np.isnan(eqn_val).any():
+        print 'Off the rails.'
+        break
+
+      # break at end
+      if tv <= 0.0 or tv >= 1.0: break
+
+    (t_path,par_path,var_path) = map(np.array,(t_path,par_path,var_path))
+
+    if output:
+      print 'Done at {}!'.format(rep)
+      print 't = {}'.format(tv)
+      print 'Equation error = {}'.format(np.max(np.abs(eqn_val)))
+
+    if plot:
+      import matplotlib.pylab as plt
+      plt.scatter(var_path[1::2],t_path[1::2],c='r')
+      plt.scatter(var_path[::2],t_path[::2],c='b')
+
+    return (t_path,par_path,var_path)
 
 # Usage
 # mod = Model('model.json')
