@@ -1,10 +1,15 @@
 from itertools import chain, islice
 from collections import OrderedDict
+
 import re
 import json
+
 import numpy as np
+from scipy.sparse.linalg import spsolve
+
 import theano
 import theano.tensor as T
+import theano.sparse as S
 
 op_dict = {
   'exp': T.exp
@@ -41,10 +46,11 @@ def row_dets(mat):
   return dets
 
 class Model:
-  def __init__(self,fname,constants={}):
+  def __init__(self,fname,constants={},sparse=False):
     # parse model specification
     with open(fname,'r') as fid:
       mod = json.load(fid,object_pairs_hook=OrderedDict)
+    self.mod = mod
 
     # constants
     self.con_dict = OrderedDict()
@@ -187,6 +193,14 @@ class Model:
     self.par_jac = T.jacobian(self.eqn_vec,self.par_vec)
     self.var_jac = T.jacobian(self.eqn_vec,self.var_vec)
 
+    # sparse?
+    if sparse:
+      self.par_jac = S.csc_from_dense(self.par_jac)
+      self.var_jac = S.csc_from_dense(self.var_jac)
+      self.linsolve = spsolve
+    else:
+      self.linsolve = np.linalg.solve
+
     # compile
     print 'Compiling...'
     self.eqn_fun = theano.function([self.par_vec,self.var_vec],self.eqn_vec)
@@ -250,16 +264,24 @@ class Model:
     return eqn_val
 
   # solve system, possibly along projection (otherwise fix t)
-  def solve_system(self,par_dict,var_dict,eqn_tol=1.0e-12,max_rep=100,output=False,plot=False):
+  def solve_system(self,par_dict,var_dict,eqn_tol=1.0e-12,max_rep=20,output=False,plot=False):
     par_val = self.dict_to_array(par_dict,self.par_info)
     var_val = self.dict_to_array(var_dict,self.var_info)
     eqn_val = self.eqn_fun(par_val,var_val)
 
+    if output:
+      print 'Initial error = {}'.format(np.max(np.abs(eqn_val)))
+
     for i in xrange(max_rep):
       varjac_val = self.varjac_fun(par_val,var_val)
-      step = -np.linalg.solve(varjac_val,eqn_val)
+      step = -self.linsolve(varjac_val,eqn_val)
       var_val += step
       eqn_val = self.eqn_fun(par_val,var_val)
+
+      if np.isnan(eqn_val).any():
+        if output:
+          print 'Off the rails.'
+        return
 
       if np.max(np.abs(eqn_val)) <= eqn_tol: break
 
@@ -412,6 +434,7 @@ class Model:
   def homotopy_elev(self,par_start_dict,par_finish_dict,var_start_dict,delt=0.01,eqn_tol=1.0e-12,max_step=1000,max_newton=10,solve=False,output=False,out_rep=5,plot=False):
     # refine initial solution if needed
     if solve: var_start_dict = self.solve_system(par_start_dict,var_start_dict,output=output)
+    if var_start_dict is None: return
 
     # convert to raw arrays
     par_start = self.dict_to_array(par_start_dict,self.par_info)
@@ -419,8 +442,8 @@ class Model:
     var_start = self.dict_to_array(var_start_dict,self.var_info)
 
     # generate analytic homotopy paths
-    path_apply = lambda t: self.path_fun(par_start,par_finish,t)
-    dpath_apply = lambda t: self.dpath_fun(par_start,par_finish,t)
+    path_apply = lambda t: (1-t)*par_start + t*par_finish
+    dpath_apply = lambda t: par_finish - par_start
 
     # start path
     tv = 0.0
@@ -447,8 +470,8 @@ class Model:
       parjac_val = self.parjac_fun(par_val,var_val)
 
       # calculate steps
-      tdir_val = np.dot(parjac_val,dpath_val)
-      step_pred = -np.linalg.solve(varjac_val,tdir_val)
+      tdir_val = parjac_val.dot(dpath_val)
+      step_pred = -self.linsolve(varjac_val,tdir_val)
 
       # increment
       delt1 = np.minimum(delt,1.0-tv)
@@ -467,7 +490,7 @@ class Model:
       # correction steps
       for i in xrange(max_newton):
         varjac_val = self.varjac_fun(par_val,var_val)
-        step_corr = -np.linalg.solve(varjac_val,eqn_val)
+        step_corr = -self.linsolve(varjac_val,eqn_val)
         var_val += step_corr
         eqn_val = self.eqn_fun(par_val,var_val)
         if np.max(np.abs(eqn_val)) <= eqn_tol: break

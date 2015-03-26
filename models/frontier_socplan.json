@@ -48,6 +48,6 @@
     "diff(Z,1)+W*f",
     "Z[-1]",
     "gamma*c*x**(gamma-1)-diff(W,1)",
-    "gamma*d*y**(gamma-1)-Z+(1-F)*W"
+    "gamma*d*y**(gamma-1)-Z+alpha*(1-F)*W"
   ]
 }
