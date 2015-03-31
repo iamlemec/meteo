@@ -277,9 +277,10 @@ class Model:
       varjac_val = self.varjac_fun(par_val,var_val)
       try:
         step = -self.linsolve(varjac_val,eqn_val)
-      except np.linalg.LinAlgError as e:
+        assert((~np.isnan(step)).all())
+      except Exception as e:
         print i
-        print e
+        print (~np.isnan(step)).all()
         print np.abs(varjac_val).max(axis=0).min()
         print np.abs(varjac_val).max(axis=0).argmin()
       var_val += step
@@ -288,6 +289,7 @@ class Model:
       if np.isnan(eqn_val).any():
         if output:
           print i
+          print eqn_val
           print 'Off the rails.'
         return
 
@@ -304,7 +306,7 @@ class Model:
 
   def homotopy_bde(self,par_start_dict,par_finish_dict,var_start_dict,delt=0.01,eqn_tol=1.0e-12,max_step=1000,max_newton=10,solve=False,output=False,out_rep=5,plot=False):
     # refine initial solution if needed
-    if solve: var_start_dict = self.solve_system(par_start_dict,var_start_dict,output=output)
+    if solve: var_start_dict = self.solve_system(par_start_dict,var_start_dict,output=output,max_rep=max_newton)
 
     # convert to raw arrays
     par_start = self.dict_to_array(par_start_dict,self.par_info)
@@ -441,7 +443,7 @@ class Model:
 
   def homotopy_elev(self,par_start_dict,par_finish_dict,var_start_dict,delt=0.01,eqn_tol=1.0e-12,max_step=1000,max_newton=10,solve=False,output=False,out_rep=5,plot=False):
     # refine initial solution if needed
-    if solve: var_start_dict = self.solve_system(par_start_dict,var_start_dict,output=output)
+    if solve: var_start_dict = self.solve_system(par_start_dict,var_start_dict,output=output,max_rep=max_newton)
     if var_start_dict is None: return
 
     # convert to raw arrays
