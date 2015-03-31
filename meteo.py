@@ -5,6 +5,7 @@ import re
 import json
 
 import numpy as np
+import scipy as sp
 from scipy.sparse.linalg import spsolve
 
 import theano
@@ -274,12 +275,19 @@ class Model:
 
     for i in xrange(max_rep):
       varjac_val = self.varjac_fun(par_val,var_val)
-      step = -self.linsolve(varjac_val,eqn_val)
+      try:
+        step = -self.linsolve(varjac_val,eqn_val)
+      except np.linalg.LinAlgError as e:
+        print i
+        print e
+        print np.abs(varjac_val).max(axis=0).min()
+        print np.abs(varjac_val).max(axis=0).argmin()
       var_val += step
       eqn_val = self.eqn_fun(par_val,var_val)
 
       if np.isnan(eqn_val).any():
         if output:
+          print i
           print 'Off the rails.'
         return
 
@@ -497,7 +505,6 @@ class Model:
 
       if output and rep%out_rep==0:
         print 'Iteration = {}'.format(rep)
-        print 'Step predict = {}'.format(step_pred[-1])
         print 'Correction steps = {}'.format(i)
         print 't = {}'.format(tv)
         #print 'par_val = {}'.format(str(par_val))
