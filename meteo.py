@@ -12,8 +12,12 @@ import theano
 import theano.tensor as T
 import theano.sparse as S
 
+import vector_tools as vt
+glob = vt.Bundle()
+
 op_dict = {
-  'exp': T.exp
+  'exp': T.exp,
+  'log': T.log
 }
 
 # utils
@@ -31,6 +35,39 @@ def inv(vec):
 
 def merge(*dlist):
   return dict(chain(*[d.items() for d in dlist]))
+
+def flat_idx(slices,shape):
+  if len(slices) == 1:
+    return slices[0]
+  else:
+    n = shape[-1]
+    return list(chain(*[[n*x+y for y in slices[-1]] for x in flat_idx(slices[:-1],shape[:-1])]))
+
+def slice_dim(points,idx,shape,flat=True):
+  points = [p if p >= 0 else p+shape[idx] for p in points]
+  ret = [points if i==idx else range(s) for (i,s) in enumerate(shape)]
+  if flat:
+    return flat_idx(ret,shape)
+  else:
+    return ret
+
+def prefixes(s):
+  for i in range(len(s)):
+    yield s[:i+1]
+
+def getkey(d,v0):
+  ret = filter(lambda (k,v): v is v0,d.items())
+  if len(ret) > 0:
+    return ret[0][0]
+  else:
+    return None
+
+def icut(vec,x):
+  ret = np.nonzero(vec>x)[0]
+  if len(ret) == 0:
+    return -1
+  else:
+    return ret[0]
 
 # HOMPACK90 STYLE
 def row_dets(mat):
@@ -99,22 +136,26 @@ class Model:
 
       if vtype == 'scalar':
         vsize = 1
-        vder = 0
+        self.var_sizes.append(vsize)
       elif vtype == 'vector':
         vsize = spec['size']
-        vder = 0
+        self.var_sizes.append(vsize)
       elif vtype == 'function':
-        vder = spec.get('deriv',0)
-        if vder > 0: info['nder'] = vder
-        arg = spec['arg']
-        info['arg'] = arg
-        ainfo = self.arg_info[arg]
-        vsize = ainfo['size']
+        vder = spec.get('derivs',[])
+        nder = len(vder)
+        args = spec['args']
+        ainfo = [self.arg_info[arg] for arg in args]
+        vsize = np.prod([ai['size'] for ai in ainfo])
+        info['vder'] = vder
+        info['nder'] = nder
+        info['args'] = args
+        info['shape'] = [self.arg_info[a]['size'] for a in args]
+        info['grid'] = map(lambda v: v.transpose().flatten(),np.meshgrid(*[self.arg_info[a]['grid'] for a in args])) if len(args) > 1 else [self.arg_info[args[0]]['grid']]
+        self.var_sizes.append(vsize)
+        self.var_sizes += sum(map(len,vder))*[vsize]
 
       info['size'] = vsize
       self.var_info[name] = info
-      self.var_sizes.append(vsize)
-      if vder > 0: self.var_sizes += vder*[vsize]
 
     # totals
     self.n_pars = len(self.par_info)
@@ -134,8 +175,11 @@ class Model:
       ptype = info['type']
       par = piter.next()
       if ptype == 'scalar':
-        self.par_dict[name] = par[0]
+        par = par[0]
+        par.name = name
+        self.par_dict[name] = par
       else:
+        par.name = name
         self.par_dict[name] = par
 
     self.var_dict = OrderedDict()
@@ -145,23 +189,52 @@ class Model:
       var = viter.next()
       vtype = info['type']
       if vtype == 'scalar':
-        self.var_dict[name] = var[0]
+        var = var[0]
+        var.name = name
+        self.var_dict[name] = var
       elif vtype == 'vector':
+        var.name = name
         self.var_dict[name] = var
       elif vtype == 'function':
+        var.name = name
         self.var_dict[name] = var
-        if info.get('nder',0) > 0: self.der_dict[var] = list(islice(viter,info['nder']))
+        vder = info.get('vder',[])
+        nder = len(vder)
+        self.der_dict[var] = {'': var}
+        for der in vder:
+          for s in prefixes(der):
+            dvar = viter.next()
+            dvar.name = name+'_'+s
+            self.der_dict[var][s] = dvar
 
-    # define derivative operator
-    def diff(var,n=1):
-      if n == 0:
-        return var
-      elif n > 0:
-        return self.der_dict[var][n-1]
-    self.diff_dict = {'diff':diff}
+    # define operators
+    def diff(var,*args):
+      name = ''.join([getkey(self.arg_dict,v) for v in args])
+      return self.der_dict[var][name]
+    def vslice(var,arg,point):
+      var_name = var.name
+      arg_name = getkey(self.arg_dict,arg)
+      var_info = self.var_info[var_name]
+      args = var_info['args']
+      (idx,_) = filter(lambda (i,a): a==arg_name,enumerate(args))[0]
+      shape = var_info['shape']
+      idx_list = slice_dim([point],idx,shape)
+      return var[idx_list]
+    def grid(var,arg):
+      var_name = var.name
+      arg_name = getkey(self.arg_dict,arg)
+      var_info = self.var_info[var_name]
+      args = var_info['args']
+      (idx,_) = filter(lambda (i,a): a==arg_name,enumerate(args))[0]
+      return var_info['grid'][idx]
+    def interp(var,arg,x):
+      i = icut(arg,x)
+      t = np.clip((arg[i+1]-x)/(arg[i+1]-arg[i]),0.0,1.0)
+      return t*vslice(var,arg,i) + (1.0-t)*vslice(var,arg,i+1)
+    self.func_dict = {'diff': diff, 'slice': vslice, 'grid': grid, 'interp': interp}
 
     # combine them all
-    self.sym_dict = merge(op_dict,self.con_dict,self.par_dict,self.var_dict,self.diff_dict,self.arg_dict)
+    self.sym_dict = merge(op_dict,self.con_dict,self.par_dict,self.var_dict,self.func_dict,self.arg_dict)
 
     # evaluate
     self.equations = []
@@ -177,15 +250,33 @@ class Model:
         size = info['size']
 
         # derivative relations - symmetric except at 0
-        nder = info.get('nder',0)
-        if nder > 0:
-          arg = info['arg']
-          grid = self.arg_dict[arg]
-          for d in xrange(nder):
-            d0 = diff(var,d)
-            d1 = diff(var,d+1)
-            self.equations.append(d0[1]-d0[0]-(grid[1]-grid[0])*d1[0])
-            self.equations.append((d0[2:]-d0[:-2])-(grid[2:]-grid[:-2])*d1[1:-1])
+        vder = info.get('vder','')
+        args = info['args']
+        shape = info['shape']
+        for der in vder:
+          v0 = '' # function value
+          for v1 in prefixes(der):
+            # collect argument info
+            arg = v1[-1]
+            (adx,_) = filter(lambda (i,a): a==arg,enumerate(args))[0]
+            s = shape[adx]
+            grid = info['grid'][adx]
+
+            # generate accessors
+            zer_idx = slice_dim([0],adx,shape)
+            one_idx = slice_dim([1],adx,shape)
+            beg_idx = slice_dim(range(s-2),adx,shape)
+            mid_idx = slice_dim(range(1,s-1),adx,shape)
+            end_idx = slice_dim(range(2,s),adx,shape)
+
+            # calculate derivatives
+            d0 = self.der_dict[var][v0]
+            d1 = self.der_dict[var][v1]
+            self.equations.append(d0[one_idx]-d0[zer_idx]-(grid[one_idx]-grid[zer_idx])*d1[zer_idx])
+            self.equations.append((d0[end_idx]-d0[beg_idx])-(grid[end_idx]-grid[beg_idx])*d1[mid_idx])
+
+            # to next level
+            v0 = v1
 
     # repack
     self.eqn_vec = T.join(0,*map(ensure_vector,self.equations))
@@ -228,9 +319,10 @@ class Model:
         vout += list(val)
       elif vtype == 'function':
         if info.get('nder',0) == 0:
-          vout += list(val)
+          vout += list(val[0])
         else:
           vout += list(np.concatenate(val))
+    glob.vout = vout
     return np.array(vout)
 
   def array_to_dict(self,vin,dinfo,sizes):
@@ -246,7 +338,7 @@ class Model:
       if vtype == 'function':
         nder = info.get('nder',0)
         if nder == 0:
-          dout[var] = viter.next()
+          dout[var] = [viter.next()]
         else:
           dout[var] = list(islice(viter,nder+1))
     return dout
@@ -265,7 +357,7 @@ class Model:
     return eqn_val
 
   # solve system, possibly along projection (otherwise fix t)
-  def solve_system(self,par_dict,var_dict,eqn_tol=1.0e-12,max_rep=20,output=False,plot=False):
+  def solve_system(self,par_dict,var_dict,hedge=1.0,eqn_tol=1.0e-12,max_rep=20,output=False,plot=False):
     par_val = self.dict_to_array(par_dict,self.par_info)
     var_val = self.dict_to_array(var_dict,self.var_info)
     eqn_val = self.eqn_fun(par_val,var_val)
@@ -276,14 +368,15 @@ class Model:
     for i in xrange(max_rep):
       varjac_val = self.varjac_fun(par_val,var_val)
       try:
-        step = -self.linsolve(varjac_val,eqn_val)
-        assert((~np.isnan(step)).all())
+        stepv = -self.linsolve(varjac_val,eqn_val)
+        assert((~np.isnan(stepv)).all())
       except Exception as e:
         print i
-        print (~np.isnan(step)).all()
         print np.abs(varjac_val).max(axis=0).min()
         print np.abs(varjac_val).max(axis=0).argmin()
-      var_val += step
+        glob.update(locals(),sub=['par_val','var_val','stepv','varjac_val','eqn_val'])
+        raise e
+      var_val += hedge*stepv
       eqn_val = self.eqn_fun(par_val,var_val)
 
       if np.isnan(eqn_val).any():
@@ -293,7 +386,13 @@ class Model:
           print 'Off the rails.'
         return
 
-      if np.max(np.abs(eqn_val)) <= eqn_tol: break
+      eqn_err = np.max(np.abs(eqn_val))
+
+      if i%20 == 0:
+        if output:
+          print '%i: %g' % (i,eqn_err)
+
+      if eqn_err <= eqn_tol: break
 
     if output:
       print 'Equation Solved ({})'.format(i)
