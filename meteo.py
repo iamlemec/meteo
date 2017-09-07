@@ -56,7 +56,7 @@ def prefixes(s):
     yield s[:i+1]
 
 def getkey(d,v0):
-  ret = filter(lambda (k,v): v is v0,d.items())
+  ret = filter(lambda kv: kv[1] is v0, d.items())
   if len(ret) > 0:
     return ret[0][0]
   else:
@@ -75,7 +75,7 @@ def row_dets(mat):
   qr = np.linalg.qr(mat,'r')
   dets = np.zeros(np1)
   dets[np1-1] = 1.0
-  for lw in xrange(2,np1+1):
+  for lw in range(2,np1+1):
       i = np1 - lw
       ik = i + 1
       dets[i] = -np.dot(qr[i,ik:np1],dets[ik:np1])/qr[i,i]
@@ -173,7 +173,7 @@ class Model:
     piter = iter(split(self.par_vec,self.par_sizes))
     for (name,info) in self.par_info.items():
       ptype = info['type']
-      par = piter.next()
+      par = next(piter)
       if ptype == 'scalar':
         par = par[0]
         par.name = name
@@ -186,7 +186,7 @@ class Model:
     self.der_dict = OrderedDict()
     viter = iter(split(self.var_vec,self.var_sizes))
     for (name,info) in self.var_info.items():
-      var = viter.next()
+      var = next(viter)
       vtype = info['type']
       if vtype == 'scalar':
         var = var[0]
@@ -216,7 +216,7 @@ class Model:
       arg_name = getkey(self.arg_dict,arg)
       var_info = self.var_info[var_name]
       args = var_info['args']
-      (idx,_) = filter(lambda (i,a): a==arg_name,enumerate(args))[0]
+      (idx, _) = filter(lambda ia: ia[1]==arg_name, enumerate(args))[0]
       shape = var_info['shape']
       idx_list = slice_dim([point],idx,shape)
       return var[idx_list]
@@ -225,7 +225,7 @@ class Model:
       arg_name = getkey(self.arg_dict,arg)
       var_info = self.var_info[var_name]
       args = var_info['args']
-      (idx,_) = filter(lambda (i,a): a==arg_name,enumerate(args))[0]
+      (idx, _) = filter(lambda ia: ia[1]==arg_name, enumerate(args))[0]
       return var_info['grid'][idx]
     def interp(var,arg,x):
       i = icut(arg,x)
@@ -258,7 +258,7 @@ class Model:
           for v1 in prefixes(der):
             # collect argument info
             arg = v1[-1]
-            (adx,_) = filter(lambda (i,a): a==arg,enumerate(args))[0]
+            (adx, _) = filter(lambda ia: ia[1]==arg, enumerate(args))[0]
             s = shape[adx]
             grid = info['grid'][adx]
 
@@ -294,7 +294,7 @@ class Model:
       self.linsolve = np.linalg.solve
 
     # compile
-    print 'Compiling...'
+    print('Compiling...')
     self.eqn_fun = theano.function([self.par_vec,self.var_vec],self.eqn_vec)
     self.parjac_fun = theano.function([self.par_vec,self.var_vec],self.par_jac)
     self.varjac_fun = theano.function([self.par_vec,self.var_vec],self.var_jac)
@@ -349,10 +349,10 @@ class Model:
     eqn_val = self.eqn_fun(par_val,var_val)
 
     if output:
-      print 'par_val = {}'.format(str(par_val))
-      print 'var_val = {}'.format(str(var_val))
-      print 'eqn_val = {}'.format(str(eqn_val))
-      print
+      print('par_val = {}'.format(str(par_val)))
+      print('var_val = {}'.format(str(var_val)))
+      print('eqn_val = {}'.format(str(eqn_val)))
+      print()
 
     return eqn_val
 
@@ -363,17 +363,17 @@ class Model:
     eqn_val = self.eqn_fun(par_val,var_val)
 
     if output:
-      print 'Initial error = {}'.format(np.max(np.abs(eqn_val)))
+      print('Initial error = {}'.format(np.max(np.abs(eqn_val))))
 
-    for i in xrange(max_rep):
+    for i in range(max_rep):
       varjac_val = self.varjac_fun(par_val,var_val)
       try:
         stepv = -self.linsolve(varjac_val,eqn_val)
         assert((~np.isnan(stepv)).all())
       except Exception as e:
-        print i
-        print np.abs(varjac_val).max(axis=0).min()
-        print np.abs(varjac_val).max(axis=0).argmin()
+        print(i)
+        print(np.abs(varjac_val).max(axis=0).min())
+        print(np.abs(varjac_val).max(axis=0).argmin())
         glob.update(locals(),sub=['par_val','var_val','stepv','varjac_val','eqn_val'])
         raise e
       var_val += hedge*stepv
@@ -381,25 +381,25 @@ class Model:
 
       if np.isnan(eqn_val).any():
         if output:
-          print i
-          print eqn_val
-          print 'Off the rails.'
+          print(i)
+          print(eqn_val)
+          print('Off the rails.')
         return
 
       eqn_err = np.max(np.abs(eqn_val))
 
       if i%20 == 0:
         if output:
-          print '%i: %g' % (i,eqn_err)
+          print('%i: %g' % (i,eqn_err))
 
       if eqn_err <= eqn_tol: break
 
     if output:
-      print 'Equation Solved ({})'.format(i)
-      #print 'par_val = {}'.format(str(par_val))
-      #print 'var_val = {}'.format(str(var_val))
-      #print 'eqn_val = {}'.format(str(eqn_val))
-      print
+      print('Equation Solved ({})'.format(i))
+      #print('par_val = {}'.format(str(par_val)))
+      #print('var_val = {}'.format(str(var_val)))
+      #print('eqn_val = {}'.format(str(eqn_val)))
+      print()
 
     return self.array_to_dict(var_val,self.var_info,self.var_sizes)
 
@@ -420,11 +420,11 @@ class Model:
     tv = 0.0
 
     if output:
-      print 't = {}'.format(tv)
-      #print 'par_val = {}'.format(par_start)
-      #print 'var_val = {}'.format(var_start)
-      print 'Equation error = {}'.format(np.max(np.abs(self.eqn_fun(par_start,var_start))))
-      print
+      print('t = {}'.format(tv))
+      #print('par_val = {}'.format(par_start))
+      #print('var_val = {}'.format(var_start))
+      print('Equation error = {}'.format(np.max(np.abs(self.eqn_fun(par_start,var_start)))))
+      print()
 
     # save path
     t_path = [tv]
@@ -433,7 +433,7 @@ class Model:
 
     direc = None
     var_val = var_start.copy()
-    for rep in xrange(max_step):
+    for rep in range(max_step):
       # calculate jacobians
       par_val = path_apply(tv)
       dpath_val = dpath_apply(tv)
@@ -481,7 +481,7 @@ class Model:
       # projection steps
       tv0 = tv
       var_val0 = var_val.copy()
-      for i in xrange(max_newton):
+      for i in range(max_newton):
         if tv == 0.0 or tv == 1.0:
           proj_dir = np.r_[np.zeros(self.sz_vars),1.0]
         else:
@@ -504,14 +504,14 @@ class Model:
         if np.max(np.abs(eqn_val)) <= eqn_tol: break
 
       if output and rep%out_rep==0:
-        print 'Iteration = {}'.format(rep)
-        print 'Step predict = {}'.format(step_pred[-1])
-        print 'Correction steps = {}'.format(i)
-        print 't = {}'.format(tv)
-        #print 'par_val = {}'.format(str(par_val))
-        #print 'var_val = {}'.format(str(var_val))
-        print 'Equation error = {}'.format(np.max(np.abs(eqn_val)))
-        print
+        print('Iteration = {}'.format(rep))
+        print('Step predict = {}'.format(step_pred[-1]))
+        print('Correction steps = {}'.format(i))
+        print('t = {}'.format(tv))
+        #print('par_val = {}'.format(str(par_val)))
+        #print('var_val = {}'.format(str(var_val)))
+        print('Equation error = {}'.format(np.max(np.abs(eqn_val))))
+        print()
 
       # store
       t_path.append(tv)
@@ -520,7 +520,7 @@ class Model:
 
       # if we can't stay on the path
       if (np.max(np.abs(eqn_val)) > eqn_tol) or np.isnan(eqn_val).any():
-        print 'Off the rails.'
+        print('Off the rails.')
         break
 
       # break at end
@@ -529,9 +529,9 @@ class Model:
     (t_path,par_path,var_path) = map(np.array,(t_path,par_path,var_path))
 
     if output:
-      print 'Done at {}!'.format(rep)
-      print 't = {}'.format(tv)
-      print 'Equation error = {}'.format(np.max(np.abs(eqn_val)))
+      print('Done at {}!'.format(rep))
+      print('t = {}'.format(tv))
+      print('Equation error = {}'.format(np.max(np.abs(eqn_val))))
 
     if plot:
       import matplotlib.pylab as plt
@@ -558,11 +558,11 @@ class Model:
     tv = 0.0
 
     if output:
-      print 't = {}'.format(tv)
-      #print 'par_val = {}'.format(par_start)
-      #print 'var_val = {}'.format(var_start)
-      print 'Equation error = {}'.format(np.max(np.abs(self.eqn_fun(par_start,var_start))))
-      print
+      print('t = {}'.format(tv))
+      #print('par_val = {}'.format(par_start))
+      #print('var_val = {}'.format(var_start))
+      print('Equation error = {}'.format(np.max(np.abs(self.eqn_fun(par_start,var_start)))))
+      print()
 
     # save path
     t_path = [tv]
@@ -571,7 +571,7 @@ class Model:
 
     direc = None
     var_val = var_start.copy()
-    for rep in xrange(max_step):
+    for rep in range(max_step):
       # calculate jacobians
       par_val = path_apply(tv)
       dpath_val = dpath_apply(tv)
@@ -597,7 +597,7 @@ class Model:
       var_path.append(var_val.copy())
 
       # correction steps
-      for i in xrange(max_newton):
+      for i in range(max_newton):
         varjac_val = self.varjac_fun(par_val,var_val)
         step_corr = -self.linsolve(varjac_val,eqn_val)
         var_val += step_corr
@@ -605,13 +605,13 @@ class Model:
         if np.max(np.abs(eqn_val)) <= eqn_tol: break
 
       if output and rep%out_rep==0:
-        print 'Iteration = {}'.format(rep)
-        print 'Correction steps = {}'.format(i)
-        print 't = {}'.format(tv)
-        #print 'par_val = {}'.format(str(par_val))
-        #print 'var_val = {}'.format(str(var_val))
-        print 'Equation error = {}'.format(np.max(np.abs(eqn_val)))
-        print
+        print('Iteration = {}'.format(rep))
+        print('Correction steps = {}'.format(i))
+        print('t = {}'.format(tv))
+        #print('par_val = {}'.format(str(par_val)))
+        #print('var_val = {}'.format(str(var_val)))
+        print('Equation error = {}'.format(np.max(np.abs(eqn_val))))
+        print()
 
       # store
       t_path.append(tv)
@@ -620,7 +620,7 @@ class Model:
 
       # if we can't stay on the path
       if (np.max(np.abs(eqn_val)) > eqn_tol) or np.isnan(eqn_val).any():
-        print 'Off the rails.'
+        print('Off the rails.')
         break
 
       # break at end
@@ -629,9 +629,9 @@ class Model:
     (t_path,par_path,var_path) = map(np.array,(t_path,par_path,var_path))
 
     if output:
-      print 'Done at {}!'.format(rep)
-      print 't = {}'.format(tv)
-      print 'Equation error = {}'.format(np.max(np.abs(eqn_val)))
+      print('Done at {}!'.format(rep))
+      print('t = {}'.format(tv))
+      print('Equation error = {}'.format(np.max(np.abs(eqn_val))))
 
     if plot:
       import matplotlib.pylab as plt

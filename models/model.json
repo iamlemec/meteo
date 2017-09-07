@@ -1,7 +1,5 @@
 {
-  "constants": {
-    "alpha": 3.0
-  },
+  "constants": ["alpha"],
   "arguments": {},
   "parameters": {
     "z": {
