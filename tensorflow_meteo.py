@@ -53,11 +53,12 @@ def vector_environ(vec, spec):
     return vd
 
 class Model:
-    def __init__(self, model):
+    def __init__(self, model, zfuzz=None):
         spec = json.load(open(model)) if type(model) is str else model
         self.const = spec.get('constants', {})
         self.par_spec = spec['parameters']
         self.var_spec = spec['variables']
+        self.zfuzz = zfuzz
 
         # fill in defaults
         self.sz_pars = sum(self.par_spec.values())
@@ -65,7 +66,10 @@ class Model:
 
         # input vectors
         self.par_vec = tf.Variable(np.zeros(self.sz_pars, dtype=FTYPE), name='parvec')
-        self.var_vec = tf.Variable(np.zeros(self.sz_vars, dtype=FTYPE), name='varvec')
+        if zfuzz is not None:
+            self.var_vec = 
+        else:
+            self.var_vec = tf.Variable(np.zeros(self.sz_vars, dtype=FTYPE), name='varvec')
 
         # environments
         self.par_env = vector_environ(self.par_vec, self.par_spec)
