@@ -12,7 +12,6 @@ from scipy.sparse.linalg import spsolve
 new = np.newaxis
 
 import tensorflow as tf
-FTYPE = np.float64
 
 # utils
 def ensure_matrix(x):
@@ -52,12 +51,35 @@ def vector_environ(vec, spec):
         loc += sz
     return vd
 
+def dict_to_array(self, din, spec):
+    vout = []
+    for (nm, sz) in spec.items():
+        val = din[nm]
+        if sz == 1:
+            vout += [val]
+        else:
+            vout += list(val)
+    return np.array(vout)
+
+def array_to_dict(self, vin, spec):
+    dout = {}
+    loc = 0
+    for (nm, sz) in spec.items():
+        val = vin[loc:loc+sz]
+        if sz == 1:
+            dout[nm] = val[0]
+        else:
+            dout[nm] = val
+        loc += sz
+    return dout
+
 class Model:
     def __init__(self, model, zfuzz=None):
         spec = json.load(open(model)) if type(model) is str else model
         self.const = spec.get('constants', {})
         self.par_spec = spec['parameters']
         self.var_spec = spec['variables']
+        self.complex = self.zfuzz is not None
         self.zfuzz = zfuzz
 
         # fill in defaults
@@ -65,11 +87,12 @@ class Model:
         self.sz_vars = sum(self.var_spec.values())
 
         # input vectors
-        self.par_vec = tf.Variable(np.zeros(self.sz_pars, dtype=FTYPE), name='parvec')
-        if zfuzz is not None:
-            self.var_vec = 
+        self.par_vec = tf.Variable(np.zeros(self.sz_pars, dtype=tf.float64), name='parvec')
+        if self.complex:
+            self.cvar_vec = tf.Variable(np.zeros(self.sz_vars, dtype=tf.complex128, name='varvec')
+            self.var_vec = tf.concat([tf.real(self.cvar_vec), tf.imag(self.cvar_vec)], 0)
         else:
-            self.var_vec = tf.Variable(np.zeros(self.sz_vars, dtype=FTYPE), name='varvec')
+            self.var_vec = tf.Variable(np.zeros(self.sz_vars, dtype=tf.float64), name='varvec')
 
         # environments
         self.par_env = vector_environ(self.par_vec, self.par_spec)
@@ -113,31 +136,9 @@ class Model:
         self.parjac_fun = state_evaler(self.par_jac)
         self.varjac_fun = state_evaler(self.var_jac)
 
-    def dict_to_array(self, din, spec):
-        vout = []
-        for (nm, sz) in spec.items():
-            val = din[nm]
-            if sz == 1:
-                vout += [val]
-            else:
-                vout += list(val)
-        return np.array(vout)
-
-    def array_to_dict(self, vin, spec):
-        dout = {}
-        loc = 0
-        for (nm, sz) in spec.items():
-            val = vin[loc:loc+sz]
-            if sz == 1:
-                dout[nm] = val[0]
-            else:
-                dout[nm] = val
-            loc += sz
-        return dout
-
     def eval_system(self, par_dict, var_dict, output=False):
-        par_val = self.dict_to_array(par_dict, self.par_spec)
-        var_val = self.dict_to_array(var_dict, self.var_spec)
+        par_val = dict_to_array(par_dict, self.par_spec)
+        var_val = dict_to_array(var_dict, self.var_spec)
         eqn_val = self.eqn_fun(par_val, var_val)
 
         if output:
@@ -146,12 +147,12 @@ class Model:
             print('eqn_val = {}'.format(str(eqn_val)))
             print()
 
-        return self.array_to_dict(eqn_val, self.eqn_spec)
+        return array_to_dict(eqn_val, self.eqn_spec)
 
     # solve system, possibly along projection (otherwise fix t)
     def solve_system(self, par_dict, var_dict, eqn_tol=1.0e-12, max_rep=20, output=False):
-        par_val = self.dict_to_array(par_dict, self.par_spec)
-        var_val = self.dict_to_array(var_dict, self.var_spec)
+        par_val = dict_to_array(par_dict, self.par_spec)
+        var_val = dict_to_array(var_dict, self.var_spec)
         eqn_val = self.eqn_fun(par_val, var_val)
 
         if output:
@@ -177,7 +178,7 @@ class Model:
             print('eqn_val = {}'.format(str(eqn_val)))
             print()
 
-        return self.array_to_dict(var_val, self.var_spec)
+        return array_to_dict(var_val, self.var_spec)
 
     def homotopy_bde(self, par_start_dict, par_finish_dict, var_start_dict,
                      delt=0.01, eqn_tol=1.0e-12, max_step=1000, max_newton=10,
@@ -186,9 +187,9 @@ class Model:
         if solve: var_start_dict = self.solve_system(par_start_dict, var_start_dict, output=output)
 
         # convert to raw arrays
-        par_start = self.dict_to_array(par_start_dict, self.par_spec)
-        par_finish = self.dict_to_array(par_finish_dict, self.par_spec)
-        var_start = self.dict_to_array(var_start_dict, self.var_spec)
+        par_start = dict_to_array(par_start_dict, self.par_spec)
+        par_finish = dict_to_array(par_finish_dict, self.par_spec)
+        var_start = dict_to_array(var_start_dict, self.var_spec)
 
         # generate analytic homotopy paths
         path_apply = lambda t: (1-t)*par_start + t*par_finish
@@ -326,9 +327,9 @@ class Model:
         if var_start_dict is None: return
 
         # convert to raw arrays
-        par_start = self.dict_to_array(par_start_dict, self.par_spec)
-        par_finish = self.dict_to_array(par_finish_dict, self.par_spec)
-        var_start = self.dict_to_array(var_start_dict, self.var_spec)
+        par_start = dict_to_array(par_start_dict, self.par_spec)
+        par_finish = dict_to_array(par_finish_dict, self.par_spec)
+        var_start = dict_to_array(var_start_dict, self.var_spec)
 
         # generate analytic homotopy paths
         path_apply = lambda t: (1-t)*par_start + t*par_finish
