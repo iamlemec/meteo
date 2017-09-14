@@ -1,5 +1,7 @@
 # meteo with tensorflow (python3)
 
+# complex layout: [1r, 2r, 3r, 1i, 2i, 3i]
+
 from itertools import chain, islice
 from collections import OrderedDict
 from copy import deepcopy
@@ -27,7 +29,7 @@ def inv(vec):
             return 1.0/vec
 
 def merge(*dlist):
-    return dict(chain.from_iterable([d.items() for d in dlist]))
+    return dict(chain(*[d.items() for d in dlist]))
 
 # HOMPACK90 STYLE
 def row_dets(mat):
@@ -43,27 +45,43 @@ def row_dets(mat):
     #dets *= np.prod(np.diag(qr)) # to get the scale exactly
     return dets
 
-def vector_environ(vec, spec):
+def vector_environ(vec, spec, complex=False):
     loc = 0
     vd = {}
     for (nm, sz) in spec.items():
         vd[nm] = tf.slice(vec, [loc], [sz], name=nm)
         loc += sz
+    if complex:
+        for (nm, sz) in spec.items():
+            rv = vd[nm]
+            cv = tf.slice(vec, [loc], [sz], name=nm+'_j')
+            vd[nm] = tf.complex(rv, cv, name=nm+'_c')
+            loc += sz
     return vd
 
-def dict_to_array(self, din, spec):
+def dict_to_array(din, spec, complex=False):
     vout = []
     for (nm, sz) in spec.items():
-        val = din[nm]
+        val = np.real(din[nm])
         if sz == 1:
             vout += [val]
         else:
             vout += list(val)
+    if complex:
+        for (nm, sz) in spec.items():
+            val = np.imag(din[nm])
+            if sz == 1:
+                vout += [val]
+            else:
+                vout += list(val)
     return np.array(vout)
 
-def array_to_dict(self, vin, spec):
+def array_to_dict(vin, spec, complex=False):
     dout = {}
     loc = 0
+    if complex:
+        ts = sum(spec.values())
+        vin = vin[:ts] + 1j*vin[ts:]
     for (nm, sz) in spec.items():
         val = vin[loc:loc+sz]
         if sz == 1:
@@ -79,30 +97,26 @@ class Model:
         self.const = spec.get('constants', {})
         self.par_spec = spec['parameters']
         self.var_spec = spec['variables']
-        self.complex = self.zfuzz is not None
         self.zfuzz = zfuzz
+        self.complex = self.zfuzz is not None
 
         # fill in defaults
         self.sz_pars = sum(self.par_spec.values())
         self.sz_vars = sum(self.var_spec.values())
 
         # input vectors
-        self.par_vec = tf.Variable(np.zeros(self.sz_pars, dtype=tf.float64), name='parvec')
-        if self.complex:
-            self.cvar_vec = tf.Variable(np.zeros(self.sz_vars, dtype=tf.complex128, name='varvec')
-            self.var_vec = tf.concat([tf.real(self.cvar_vec), tf.imag(self.cvar_vec)], 0)
-        else:
-            self.var_vec = tf.Variable(np.zeros(self.sz_vars, dtype=tf.float64), name='varvec')
+        self.par_vec = tf.Variable(np.zeros(self.sz_pars, dtype=np.float64), name='parvec')
+        self.var_vec = tf.Variable(np.zeros(self.sz_vars, dtype=np.float64), name='varvec')
 
         # environments
         self.par_env = vector_environ(self.par_vec, self.par_spec)
-        self.var_env = vector_environ(self.var_vec, self.var_spec)
+        self.var_env = vector_environ(self.var_vec, self.var_spec, complex=self.complex)
         self.env = merge(self.const, self.par_env, self.var_env)
 
         # parse equations
         if 'equations' in spec: self.generate_system(spec['equations'])
 
-        # solver
+        # functions
         self.linsolve = np.linalg.solve
 
     def generate_system(self, eqs):
@@ -117,28 +131,23 @@ class Model:
         # find gradients
         n_eqns = self.eqn_vec.get_shape()[0]
         eqn_list = tf.split(self.eqn_vec, n_eqns)
-        self.par_jac = [tf.gradients(eqn, self.par_vec)[0] for eqn in eqn_list]
-        self.var_jac = [tf.gradients(eqn, self.var_vec)[0] for eqn in eqn_list]
+        self.par_jac = tf.stack([tf.gradients(eqn, self.par_vec)[0] for eqn in eqn_list])
+        self.var_jac = tf.stack([tf.gradients(eqn, self.var_vec)[0] for eqn in eqn_list])
 
         # create functions
-        def state_evaler(f):
-            if type(f) is list:
-                def ev(p,v):
-                    env = {self.par_vec: p, self.var_vec: v}
-                    return np.array([fi.eval(env) for fi in f])
-            else:
-                def ev(p, v):
-                    env = {self.par_vec: p, self.var_vec: v}
-                    return f.eval(env)
+        def state_evaler(f, matrix=False):
+            def ev(p, v):
+                y = f.eval({self.par_vec: p, self.var_vec: v})
+                return ensure_matrix(y) if matrix else y
             return ev
 
         self.eqn_fun = state_evaler(self.eqn_vec)
-        self.parjac_fun = state_evaler(self.par_jac)
-        self.varjac_fun = state_evaler(self.var_jac)
+        self.parjac_fun = state_evaler(self.par_jac, matrix=True)
+        self.varjac_fun = state_evaler(self.var_jac, matrix=True)
 
     def eval_system(self, par_dict, var_dict, output=False):
         par_val = dict_to_array(par_dict, self.par_spec)
-        var_val = dict_to_array(var_dict, self.var_spec)
+        var_val = dict_to_array(var_dict, self.var_spec, complex=self.complex)
         eqn_val = self.eqn_fun(par_val, var_val)
 
         if output:
@@ -147,19 +156,19 @@ class Model:
             print('eqn_val = {}'.format(str(eqn_val)))
             print()
 
-        return array_to_dict(eqn_val, self.eqn_spec)
+        return array_to_dict(eqn_val, self.eqn_spec, complex=self.complex)
 
     # solve system, possibly along projection (otherwise fix t)
     def solve_system(self, par_dict, var_dict, eqn_tol=1.0e-12, max_rep=20, output=False):
         par_val = dict_to_array(par_dict, self.par_spec)
-        var_val = dict_to_array(var_dict, self.var_spec)
+        var_val = dict_to_array(var_dict, self.var_spec, complex=self.complex)
         eqn_val = self.eqn_fun(par_val, var_val)
 
         if output:
             print('Initial error = {}'.format(np.max(np.abs(eqn_val))))
 
         for i in range(max_rep):
-            varjac_val = ensure_matrix(self.varjac_fun(par_val, var_val))
+            varjac_val = self.varjac_fun(par_val, var_val)
             step = -self.linsolve(varjac_val, eqn_val)
             var_val += step
             eqn_val = self.eqn_fun(par_val, var_val)
@@ -178,7 +187,7 @@ class Model:
             print('eqn_val = {}'.format(str(eqn_val)))
             print()
 
-        return array_to_dict(var_val, self.var_spec)
+        return array_to_dict(var_val, self.var_spec, complex=self.complex)
 
     def homotopy_bde(self, par_start_dict, par_finish_dict, var_start_dict,
                      delt=0.01, eqn_tol=1.0e-12, max_step=1000, max_newton=10,
@@ -189,7 +198,7 @@ class Model:
         # convert to raw arrays
         par_start = dict_to_array(par_start_dict, self.par_spec)
         par_finish = dict_to_array(par_finish_dict, self.par_spec)
-        var_start = dict_to_array(var_start_dict, self.var_spec)
+        var_start = dict_to_array(var_start_dict, self.var_spec, complex=self.complex)
 
         # generate analytic homotopy paths
         path_apply = lambda t: (1-t)*par_start + t*par_finish
@@ -379,7 +388,7 @@ class Model:
 
             # correction steps
             for i in range(max_newton):
-                varjac_val = ensure_matrix(self.varjac_fun(par_val, var_val))
+                varjac_val = self.varjac_fun(par_val, var_val)
                 step_corr = -self.linsolve(varjac_val, eqn_val)
                 var_val += step_corr
                 eqn_val = self.eqn_fun(par_val, var_val)
