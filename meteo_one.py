@@ -98,6 +98,17 @@ def array_to_dict(vin, spec, complex=False):
         loc += sz
     return dout
 
+def gradient(eq, i, x):
+    ret = tf.gradients(tf.slice(eq, [i], [0]), x)[0]
+    if ret is None:
+        return tf.zeros_like(x)
+    else:
+        return ret
+
+def jacobian(eq, x):
+    n = eq.get_shape()[0]
+    return tf.transpose(tf.stack([gradient(eq, i, x) for i in range(n)], 1))
+
 # TODO: handle non-flat inputs
 class Model:
     def __init__(self, pars, vars, eqns):
@@ -111,9 +122,13 @@ class Model:
         self.eqn_sz = {eqn: int(eqn.get_shape()[0]) for eqn in eqns}
 
         # equation system and gradients
-        self.eqnvec = tf.stack(eqns, 1)
-        self.parjac = tf.stack([tf.stack(tf.gradients(eqn, pars), 1) for eqn in eqns], 0)
-        self.varjac = tf.stack([tf.stack(tf.gradients(eqn, vars), 1) for eqn in eqns], 0)
+        self.eqnvec = tf.concat(eqns, 0)
+        self.parjac = tf.concat([tf.concat([jacobian(eqn, x) for x in pars], 1) for eqn in eqns], 0)
+        self.varjac = tf.concat([tf.concat([jacobian(eqn, x) for x in vars], 1) for eqn in eqns], 0)
+
+        print(self.eqnvec.get_shape())
+        print(self.parjac.get_shape())
+        print(self.varjac.get_shape())
 
         # evaluation functions
         def state_evaler(f, matrix=False):
@@ -123,7 +138,6 @@ class Model:
             return ev
 
         self.eqnvec_fun = state_evaler(self.eqnvec)
-        self.parvec_fun = state_evaler(self.parvec)
         self.parjac_fun = state_evaler(self.parjac, matrix=True)
         self.varjac_fun = state_evaler(self.varjac, matrix=True)
 
@@ -131,26 +145,28 @@ class Model:
     def solve_system(self, p, v0, eqn_tol=1.0e-12, max_rep=20, output=False):
         v = dict_copy(v0)
 
-        eqn_val = self.eqnvec_fun(p, v)
+        eqnvec_val = self.eqnvec_fun(p, v)
         if output:
-            print('Initial error = {}'.format(np.max(np.abs(eqn_val))))
+            print('Initial error = {}'.format(np.max(np.abs(eqnvec_val))))
 
         for i in range(max_rep):
             varjac_val = self.varjac_fun(p, v)
-            step = -np.linalg.solve(varjac_val, eqn_val)
+            print(varjac_val.shape)
+            print(eqnvec_val.shape)
+            step = -np.linalg.solve(varjac_val, eqnvec_val)
             dstep = array_to_dict(step, self.var_sz)
             for k in v: v[k] += dstep[k]
-            eqn_val = self.eqnvec_fun(p, v)
+            eqnvec_val = self.eqnvec_fun(p, v)
 
             if output:
-                print('Equation error = {}'.format(np.max(np.abs(eqn_val))))
+                print('Equation error = {}'.format(np.max(np.abs(eqnvec_val))))
 
             if np.isnan(eqn_val).any():
                 if output:
                     print('Off the rails.')
                 return
 
-            if np.max(np.abs(eqn_val)) <= eqn_tol: break
+            if np.max(np.abs(eqnvec_val)) <= eqn_tol: break
 
         return v
 
@@ -193,7 +209,7 @@ class Model:
             parjac_val = self.parjac_fun(p, v)
 
             # calculate steps
-            tdir_val = np.dot(parjac_val, dp)[:, new]
+            tdir_val = np.dot(parjac_val, dp)
             fulljac_val = np.hstack([varjac_val, tdir_val])
             step_pred = row_dets(fulljac_val)
 
@@ -219,11 +235,11 @@ class Model:
 
             # increment
             tv += step_pred[-1]
-            dict_add(v, dict_to_array(step_pred[:-1], self.var_sz))
+            dict_add(v, array_to_dict(step_pred[:-1], self.var_sz))
 
             # new function value
             p = path_apply(tv)
-            eqn_val = self.eqn_fun(p, v)
+            eqn_val = self.eqnvec_fun(p, v)
 
             # store
             t_path.append(tv)
@@ -240,7 +256,7 @@ class Model:
                 dv = dpath_apply(tv)
                 varjac_val = self.varjac_fun(p, v)
                 parjac_val = self.parjac_fun(p, v)
-                tdir_val = np.dot(parjac_val, dpath_val)[:, new]
+                tdir_val = np.dot(parjac_val, dp)
 
                 fulljac_val = np.hstack([varjac_val, tdir_val])
                 projjac_val = np.vstack([fulljac_val, proj_dir])
@@ -249,7 +265,7 @@ class Model:
                 tv += step_corr[-1]
                 par_val = path_apply(tv)
                 dict_add(v, array_to_dict(step_corr[:-1], self.var_sz))
-                eqn_val = self.eqn_fun(p, v)
+                eqn_val = self.eqnvec_fun(p, v)
 
                 if np.max(np.abs(eqn_val)) <= eqn_tol: break
 
