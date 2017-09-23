@@ -99,7 +99,7 @@ def array_to_dict(vin, spec, complex=False):
     return dout
 
 def gradient(eq, i, x):
-    ret = tf.gradients(tf.slice(eq, [i], [0]), x)[0]
+    ret = tf.gradients(tf.slice(eq, [i], [1]), x)[0]
     if ret is None:
         return tf.zeros_like(x)
     else:
@@ -107,7 +107,10 @@ def gradient(eq, i, x):
 
 def jacobian(eq, x):
     n = eq.get_shape()[0]
-    return tf.transpose(tf.stack([gradient(eq, i, x) for i in range(n)], 1))
+    return tf.transpose(tf.stack([gradient(eq, i, x) for i in range(n)], 0))
+
+def display(d):
+    return {v.name: list(d[v]) for v in d}
 
 # TODO: handle non-flat inputs
 class Model:
@@ -123,12 +126,8 @@ class Model:
 
         # equation system and gradients
         self.eqnvec = tf.concat(eqns, 0)
-        self.parjac = tf.concat([tf.concat([jacobian(eqn, x) for x in pars], 1) for eqn in eqns], 0)
-        self.varjac = tf.concat([tf.concat([jacobian(eqn, x) for x in vars], 1) for eqn in eqns], 0)
-
-        print(self.eqnvec.get_shape())
-        print(self.parjac.get_shape())
-        print(self.varjac.get_shape())
+        self.parjac = tf.concat([tf.concat([jacobian(eqn, x) for x in pars], 0) for eqn in eqns], 1)
+        self.varjac = tf.concat([tf.concat([jacobian(eqn, x) for x in vars], 0) for eqn in eqns], 1)
 
         # evaluation functions
         def state_evaler(f, matrix=False):
@@ -141,34 +140,50 @@ class Model:
         self.parjac_fun = state_evaler(self.parjac, matrix=True)
         self.varjac_fun = state_evaler(self.varjac, matrix=True)
 
-    # solve system, possibly along projection (otherwise fix t)
-    def solve_system(self, p, v0, eqn_tol=1.0e-12, max_rep=20, output=False):
-        v = dict_copy(v0)
+    def eval_system(self, p, v):
+        return {eq: eq.eval(feed_dict=dict_merge(p, v)) for eq in self.eqns}
 
-        eqnvec_val = self.eqnvec_fun(p, v)
+    # solve system, possibly along projection (otherwise fix t)
+    def solve_system(self, par, var0, eqn_tol=1.0e-12, max_rep=20, output=False):
+        var = dict_copy(var0)
+
         if output:
-            print('Initial error = {}'.format(np.max(np.abs(eqnvec_val))))
+            kfmt = lambda k: ''.join(k.split(':')[:-1]) if ':' in k else k
+            lfmt = lambda v: '[' + ' '.join(['%12s' % str(x) for x in v]) + ']'
+            dfmt = lambda d: '\n'.join(['%s = %s' % (kfmt(k), lfmt(v)) for k, v in display(d).items()])
+            print(dfmt(par))
+
+        eqnvec_val = self.eqnvec_fun(par, var)
+        if output:
+            print(dfmt(var))
+            print('value = %s' % lfmt(eqnvec_val))
+            print('error = {}'.format(np.max(np.abs(eqnvec_val))))
 
         for i in range(max_rep):
-            varjac_val = self.varjac_fun(p, v)
-            print(varjac_val.shape)
-            print(eqnvec_val.shape)
+            print('rep = %d' % i)
+            varjac_val = self.varjac_fun(par, var)
+            print(varjac_val)
+            print(eqnvec_val)
             step = -np.linalg.solve(varjac_val, eqnvec_val)
-            dstep = array_to_dict(step, self.var_sz)
-            for k in v: v[k] += dstep[k]
-            eqnvec_val = self.eqnvec_fun(p, v)
+            print(step)
+            for k, v in array_to_dict(step, self.var_sz).items():
+                print('%s -> %s' % (k.name, v))
+                var[k] += v
+            eqnvec_val = self.eqnvec_fun(par, var)
 
             if output:
-                print('Equation error = {}'.format(np.max(np.abs(eqnvec_val))))
+                print(dfmt(var))
+                print('value = %s' % lfmt(eqnvec_val))
+                print('error = {}'.format(np.max(np.abs(eqnvec_val))))
 
-            if np.isnan(eqn_val).any():
+            if np.isnan(eqnvec_val).any():
                 if output:
                     print('Off the rails.')
                 return
 
             if np.max(np.abs(eqnvec_val)) <= eqn_tol: break
 
-        return v
+        return var
 
     def homotopy_bde(self, p0, p1, v0, delt=0.01, eqn_tol=1.0e-12,
                      max_step=1000, max_newton=10, out_rep=5,
