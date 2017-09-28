@@ -1,4 +1,4 @@
-# meteo with tensorflow (python3.6+)
+# meteo with the purest tensorflow (python3.6+)
 
 from itertools import chain, islice
 from collections import OrderedDict
@@ -37,7 +37,7 @@ def dict_add(d0, d1):
         d0[k] += d1[k]
 
 # HOMPACK90 STYLE
-def row_dets(mat):
+def row_dets_old(mat):
     (n, np1) = mat.shape
     qr = np.linalg.qr(mat, 'r')
     dets = np.zeros(np1)
@@ -46,6 +46,19 @@ def row_dets(mat):
             i = np1 - lw
             ik = i + 1
             dets[i] = -np.dot(qr[i, ik:], dets[ik:])/qr[i, i]
+    dets *= np.sign(np.prod(np.diag(qr))) # just for the sign
+    #dets *= np.prod(np.diag(qr)) # to get the scale exactly
+    return dets
+
+def row_dets(mat):
+    (n, np1) = mat.shape
+    q, r = tf.qr(mat)
+    dets = np.zeros(np1)
+    dets[np1-1] = 1.0
+    for lw in range(2, np1+1):
+            i = np1 - lw
+            ik = i + 1
+            dets[i] = -np.dot(qr[i, ik:np1], dets[ik:np1])/qr[i, i]
     dets *= np.sign(np.prod(np.diag(qr))) # just for the sign
     #dets *= np.prod(np.diag(qr)) # to get the scale exactly
     return dets
@@ -84,8 +97,6 @@ def jacobian(eq, x):
     return tf.stack([gradient(eq, i, x) for i in range(n)], 0)
 
 def varname(nm):
-    #ret = re.match(r'(.+?)(_[0-9]*)(:[0-9]*)', nm)
-    #return ret.group(1) if ret is not None else nm
     if ':' in nm: nm = ''.join(nm.split(':')[:-1])
     if '_' in nm: nm = ''.join(nm.split('_')[:-1])
     return nm
@@ -106,6 +117,8 @@ class Model:
         self.eqn_sz = {eqn: int(eqn.get_shape()[0]) for eqn in eqns}
 
         # equation system
+        self.parvec = tf.concat(pars, 0)
+        self.varvec = tf.concat(vars, 0)
         self.eqnvec = tf.concat(eqns, 0)
         self.error = tf.reduce_max(tf.abs(self.eqnvec))
 
@@ -113,86 +126,61 @@ class Model:
         self.parjac = tf.concat([tf.concat([jacobian(eqn, x) for x in pars], 1) for eqn in eqns], 0)
         self.varjac = tf.concat([tf.concat([jacobian(eqn, x) for x in vars], 1) for eqn in eqns], 0)
 
-        # evaluation functions
-        def state_evaler(f, matrix=False):
-            def ev(p, v):
-                y = f.eval(feed_dict=dict_merge(p, v))
-                return ensure_matrix(y) if matrix else y
-            return ev
+        # newton steps
+        self.newton_step = -tf.squeeze(tf.matrix_solve(self.varjac, tf.expand_dims(self.eqnvec, 1)))
+        self.newton_dvars = tf.split(self.newton_step, list(self.var_sz.values()), 0)
+        self.newton_update = [tf.assign(v, v+s) for v, s in zip(self.vars, self.newton_dvars)]
 
-        self.eqnvec_fun = state_evaler(self.eqnvec)
-        self.parjac_fun = state_evaler(self.parjac, matrix=True)
-        self.varjac_fun = state_evaler(self.varjac, matrix=True)
+        # target param
+        self.tpars = [tf.zeros_like(p) for p in pars]
+        self.tparvec = tf.concat(self.tpars, 0)
 
     def eval_system(self, p, v, sess=None):
         return {eq: eq.eval(feed_dict=dict_merge(p, v)) for eq in self.eqns}
 
-    # solve system, possibly along projection (otherwise fix t)
-    def solve_system(self, par, var0, eqn_tol=1.0e-12, max_rep=20, output=False):
-        var = dict_copy(var0)
+    # solve system symbolically
+    def solve_system(self, eqn_tol=1.0e-12, max_rep=20, output=False, sess=None):
+        if sess is None:
+            sess = tf.get_default_session()
 
         if output:
-            kfmt = lambda k: ''.join(k.split(':')[:-1]) if ':' in k else k
-            lfmt = lambda v: '[' + ' '.join(['%12s' % str(x) for x in v]) + ']'
-            dfmt = lambda d: '\n'.join(['%s = %s' % (kfmt(k), lfmt(v)) for k, v in resolve(d).items()])
-            print(dfmt(par))
-            print()
-
-        eqnvec_val = self.eqnvec_fun(par, var)
-        err = np.max(np.abs(eqnvec_val))
-
-        if output:
-            print(dfmt(var))
-            print(f'value = {lfmt(eqnvec_val)}')
-            print(f'error = {err}')
-            print()
+            error = self.error.eval()
+            print(f'error({0}) = {error}')
 
         for i in range(max_rep):
-            varjac_val = self.varjac_fun(par, var)
-            step = -np.linalg.solve(varjac_val, eqnvec_val)
-            dict_add(var, array_to_dict(step, self.var_sz))
-            eqnvec_val = self.eqnvec_fun(par, var)
-            err = np.max(np.abs(eqnvec_val))
+            sess.run(self.newton_update)
+            error = self.error.eval()
 
             if output:
-                print(f'rep = {i}' % i)
-                print(dfmt(var))
-                print(f'value = {lfmt(eqnvec_val)}')
-                print(f'error = {err}')
-                print()
+                print(f'error({i+1}) = {error}')
 
-            if np.isnan(eqnvec_val).any():
+            if np.isnan(error):
                 if output:
                     print('OFF THE RAILS')
                 return
 
-            if err <= eqn_tol: break
+            if error <= eqn_tol:
+                break
 
-        return var
-
-    def homotopy_bde(self, p0, p1, v0, delt=0.01, eqn_tol=1.0e-12,
-                     max_step=1000, max_newton=10, out_rep=5,
-                     solve=False, output=False, plot=False):
-        # refine initial solution if needed else copy
+    def homotopy_bde(self, p1, delt=0.01, eqn_tol=1.0e-12, max_step=1000,
+                          max_newton=10, out_rep=5, solve=False, output=False,
+                          plot=False):
         if solve:
-            print('SOLVING SYSTEM AT P0')
-            v = self.solve_system(p0, v0, output=False)
-        else:
-            v = dict_copy(v0)
+            print('SOLVING SYSTEM')
+            self.solve_system(output=output)
 
         # generate analytic homotopy paths
-        p0_vec = dict_to_array(p0, self.par_sz)
+        p0_vec = self.parvec.eval()
         p1_vec = dict_to_array(p1, self.par_sz)
-        path_apply = lambda t: {k: (1-t)*p0[k] + t*p1[k] for k in self.pars}
-        dpath_apply = lambda t: p1_vec - p0_vec
+        path = lambda t: (1-t)*p0 + t*p1
+        dpath = p1_vec - p0_vec
 
         # start path
         tv = 0.0
 
         if output:
             print(f't = {tv}')
-            eqnvec_val = self.eqnvec_fun(p0, v)
-            err = np.max(np.abs(eqnvec_val))
+            error = self.error.eval()
             print(f'error = {err}')
             print()
 
@@ -207,12 +195,6 @@ class Model:
             if iout:
                 print(f'ITERATION = {rep}')
                 print()
-
-            # calculate jacobians
-            p = path_apply(tv)
-            dp = dpath_apply(tv)
-            varjac_val = self.varjac_fun(p, v)
-            parjac_val = self.parjac_fun(p, v)
 
             # prediction step
             tdir_val = np.dot(parjac_val, dp)[:, new]
