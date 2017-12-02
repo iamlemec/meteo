@@ -1,6 +1,8 @@
 import tensorflow as tf
 import numpy as np
 import numpy.linalg as la
+from operator import mul
+from functools import reduce
 T = tf.transpose
 
 # params
@@ -16,10 +18,24 @@ def tolist(a):
     else:
         return [a]
 
+def prod(a):
+    return reduce(mul, a)
+
+# dim 0: inputs
+# dim 1: outputs
 def gradv(a, b):
     a = tolist(a)
     b = tolist(b)
     return tf.stack([tf.stack([tf.gradients(w, z)[0] for z in b], axis=0) for w in a], axis=1)
+
+class ConstrainedGradientDescent:
+    def __init__(self, obj, var):
+        self.obj = obj
+        self.var = var
+
+        self.siz = [x.get_shape() for x in self.var]
+        self.len = [prod(x) for x in self.siz]
+
 
 # init
 x0 = 0.2
