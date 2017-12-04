@@ -4,6 +4,8 @@ from operator import mul
 from functools import reduce
 T = tf.transpose
 
+maxiter = 100
+
 # funcs
 def prod(a):
     return reduce(mul, [int(x) for x in a], 1)
@@ -30,43 +32,45 @@ def jacobian(a, b):
     else:
         return tf.stack([flatify(tf.gradients(a, b))], axis=1)
 
-def constrained_gradient_descent(obj, con, par, var, step=0.1):
+# N: number of vars
+# M: number of cons
+# G: N x M
+def constrained_gradient_descent(obj, con, var, step=0.1):
     # shape info
-    tot = par + var
     var_shp = [x.get_shape() for x in var]
-    tot_shp = [x.get_shape() for x in tot]
 
     # derivatives
-    con_vec = flatify(con)
-    F = jacobian(obj, tot)
-    G = jacobian(con_vec, tot)
-    Gv = jacobian(con_vec, var)
+    g = flatify(con)
+    F = jacobian(obj, var)
+    G = jacobian(g, var)
 
     # constrained gradient descent
-    H = tf.matmul(T(G), G)
-    L = tf.matrix_solve(H, -tf.matmul(T(G), F))
+    L = tf.matrix_solve(
+        tf.matmul(T(G), G),
+       -tf.matmul(T(G), F)
+    )
     Ugd = step*tf.squeeze(F + tf.matmul(G, L))
 
-    # correction step
-    # J = tf.matmul(T(Gv), Gv)
-    C = tf.expand_dims(con_vec, 1)
-    # Ugn = tf.matrix_solve(J, -tf.matmul(T(Gv), C))
-    Ugn = -step*tf.matmul(T(Gv), C)
+    # correction step (zangwill-garcia)
+    Ugz = tf.squeeze(tf.matrix_solve(
+        tf.concat([T(G), Ugd[None, :]], 0),
+       -tf.concat([g[:, None], [[0.0]]], 0)
+    ))
 
     # updates
-    gd_diffs = unpack(Ugd, tot_shp)
-    gn_diffs = unpack(Ugn, var_shp)
+    gd_diffs = unpack(Ugd, var_shp)
+    gz_diffs = unpack(Ugz, var_shp)
 
     # operators
     gd_upds = increment(var, gd_diffs)
-    gn_upds = increment(var, gn_diffs)
+    gz_upds = increment(var, gz_diffs)
 
-    return gd_upds, gn_upds
+    return gd_upds, gz_upds
 
 # init
 x0 = 0.3
 y0 = 0.3
-z0 = np.sqrt(1.0-x0**2-y0**2)
+z0 = 0.3
 
 # vars
 x = tf.Variable(x0, dtype=tf.float64)
@@ -81,22 +85,30 @@ c2 = 1.0 - (x+0.5)**2 - (y-0.5)**2 - z**2
 f = x + y + z
 
 # update
-cgd, gn = constrained_gradient_descent(f, [c1, c2], [z], [x, y], step=0.1)
+cgd, gn = constrained_gradient_descent(f, [c1, c2], [x, y, z], step=0.1)
 
-cvec = tf.stack([c1, c2], 0)
-cerr = tf.nn.l2_loss(cvec)
+# constraint error
+cvec = flatify([c1, c2])
+cerr = tf.sqrt(tf.reduce_mean(cvec**2))
 
 with tf.Session() as sess:
+    print('initializing')
     sess.run(tf.global_variables_initializer())
-    print(sess.run(x), sess.run(y), sess.run(z), sess.run(cerr))
+    print(f'{i:3d}: {x.eval():10g} {y.eval():10g} {z.eval():10g} = {f.eval():10g} {cerr.eval():10g}')
 
     print('solving')
-    for i in range(20):
+    for i in range(maxiter):
         sess.run(gn)
-        print(sess.run(x), sess.run(y), sess.run(z), sess.run(cerr))
+        err0 = cerr.eval()
+        print(f'{i:3d}: {x.eval():10g} {y.eval():10g} {z.eval():10g} = {f.eval():10g} {err0:10g}')
+        if err0 < 1e-14:
+            break
 
     print('optimizing')
-    for i in range(50):
+    for i in range(maxiter):
         sess.run(cgd)
         sess.run(gn)
-        print(sess.run(x), sess.run(y), sess.run(z), sess.run(cerr))
+        err0 = cerr.eval()
+        print(f'{i:3d}: {x.eval():10g} {y.eval():10g} {z.eval():10g} = {f.eval():10g} {err0:10g}')
+        if err0 < 1e-14:
+            break
