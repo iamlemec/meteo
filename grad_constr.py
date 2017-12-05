@@ -73,7 +73,7 @@ def constrained_gradient_descent(obj, con, var, step=0.1):
     gd_upds = increment(var, gd_diffs)
     gz_upds = increment(var, gz_diffs)
 
-    return gd_upds, gz_upds, F
+    return gd_upds, gz_upds
 
 def newton_solver(con, var):
     # shape info
