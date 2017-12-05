@@ -62,7 +62,8 @@ def constrained_gradient_descent(obj, con, var, step=0.1):
     # can be non-square so use least squares
     Ugz = squeeze(tf.matrix_solve_ls(
         tf.concat([T(G), Ugd[None, :]], 0),
-       -tf.concat([g[:, None], [[0.0]]], 0)
+       -tf.concat([g[:, None], [[0.0]]], 0),
+        fast=False
     ))
 
     # updates
@@ -73,7 +74,10 @@ def constrained_gradient_descent(obj, con, var, step=0.1):
     gd_upds = increment(var, gd_diffs)
     gz_upds = increment(var, gz_diffs)
 
-    return gd_upds, gz_upds
+    # slope
+    gain = tf.squeeze(tf.matmul(Ugd[None, :], F))
+
+    return gd_upds, gz_upds, gain
 
 def newton_solver(con, var):
     # shape info
@@ -84,7 +88,7 @@ def newton_solver(con, var):
     G = jacobian(g, var)
 
     # can be non-square so use least squares
-    U = squeeze(tf.matrix_solve_ls(T(G), -g[:, None]))
+    U = squeeze(tf.matrix_solve_ls(T(G), -g[:, None], fast=False))
 
     # updates
     diffs = unpack(U, var_shp)

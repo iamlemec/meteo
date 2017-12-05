@@ -7,8 +7,8 @@ from grad_constr import constrained_gradient_descent, newton_solver, flatify
 mod = sys.argv[1]
 
 # algorithm params
-maxiter = 100
-step = 0.1
+maxiter = 500
+step = 0.05
 tol = 1.0e-7
 
 ##
@@ -72,17 +72,20 @@ if mod == 'growth':
 
     # moments
     rnd = wt*C
-    mmt = [rnd-0.1]
+    grw = -tf.log(ilam)*tau
+    prf = pit - rnd
+    ent = e/(1.0+e)
+    mmt = [rnd-0.05, grw-0.02, prf-0.1, ent-0.3]
     mvec = flatify(mmt)
 
     # output
-    obj = -10*tf.reduce_mean(mvec**2)
+    obj = -tf.reduce_sum(mvec**2)
     con = [lmc, val, foc, ent, des, lab, res]
     var = [rho, ilam, c, eta, F, wt, vt, x, e, tau, P, R]
 
 # update
 newt = newton_solver(con, var)
-pred, corr = constrained_gradient_descent(obj, con, var, step=step)
+pred, corr, gain = constrained_gradient_descent(obj, con, var, step=step)
 
 # constraint error
 cvec = flatify(con)
@@ -90,7 +93,7 @@ cerr = tf.sqrt(tf.reduce_mean(cvec**2))
 
 # output
 def status(i):
-    print(f'{i:4d}: {obj.eval():10g} {cerr.eval():10g}')
+    print(f'{i:4d}: {obj.eval():10g} {cerr.eval():10g} {gain.eval():10g}')
 
 # with tf.Session() as sess:
 
@@ -111,6 +114,6 @@ print('optimizing')
 for i in range(maxiter):
     pred.run()
     corr.run()
-    status(i)
-    # if cerr.eval() < tol:
-    #     break
+    if i % 10 == 0: status(i)
+    if gain.eval() < tol:
+        break
