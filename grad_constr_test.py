@@ -8,7 +8,7 @@ mod = sys.argv[1]
 
 # algorithm params
 maxiter = 500
-step = 0.05
+step = 0.2
 tol = 1.0e-7
 
 ##
@@ -45,7 +45,7 @@ if mod == 'growth':
     ilam = tf.Variable(0.9)
     c = tf.Variable(1.5)
     eta = tf.Variable(2.2)
-    F = tf.Variable(0.5)
+    F = tf.Variable(0.1)
 
     # eq vars
     wt = tf.Variable(0.9)
@@ -75,7 +75,7 @@ if mod == 'growth':
     grw = -tf.log(ilam)*tau
     prf = pit - rnd
     ent = e/(1.0+e)
-    mmt = [rnd-0.05, grw-0.02, prf-0.1, ent-0.3]
+    mmt = [rnd-0.1, grw-0.03, prf-0.15, ent-0.3]
     mvec = flatify(mmt)
 
     # output
@@ -116,4 +116,5 @@ for i in range(maxiter):
     corr.run()
     if i % 10 == 0: status(i)
     if gain.eval() < tol:
+        status(i)
         break
