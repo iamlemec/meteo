@@ -313,7 +313,7 @@ class Model:
                           newton_output=False, plot=False):
         if solve:
             if output:
-                d print('SOLVING SYSTEM')
+                print('SOLVING SYSTEM')
             self.solve_system(output=newton_output)
 
         # start path
@@ -329,8 +329,8 @@ class Model:
 
         # save path
         t_path = [tv]
-        par_path = [{p: p.eval() for p in self.pars}]
-        var_path = [{v: v.eval() for v in self.vars}]
+        par_path = {p: [p.eval()] for p in self.pars}
+        var_path = {v: [v.eval()] for v in self.vars}
 
         direc = None
         for rep in range(max_step):
@@ -364,8 +364,10 @@ class Model:
 
             # store
             t_path.append(tv)
-            par_path.append({p: p.eval() for p in self.pars})
-            var_path.append({v: v.eval() for v in self.vars})
+            for p in self.pars:
+                par_path[p].append(p.eval())
+            for v in self.vars:
+                var_path[v].append(v.eval())
 
             # if we can't stay on the path
             error = self.error.eval()
@@ -387,4 +389,10 @@ class Model:
             plt.scatter(var_path[1::2], t_path[1::2], c='r')
             plt.scatter(var_path[::2], t_path[::2], c='b')
 
-        return (t_path, par_path, var_path)
+        t_path = np.array(t_path)
+        for p in self.pars:
+            par_path[p] = np.vstack(par_path[p])
+        for v in self.vars:
+            var_path[v] = np.vstack(var_path[v])
+
+        return t_path, par_path, var_path
