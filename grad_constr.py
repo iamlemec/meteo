@@ -29,6 +29,9 @@ def grad(a, b):
         g = tf.gradients(a, x)[0]
         yield g if g is not None else tf.zeros(x.get_shape())
 
+def total_loss(vec):
+    return tf.reduce_sum([tf.nn.l2_loss(v) for v in vec])
+
 # dim 0: inputs
 # dim 1: outputs
 def jacobian(a, b):
@@ -52,7 +55,7 @@ def constrained_gradient_descent(obj, con, var, step=0.1):
     G = jacobian(g, var)
 
     # constrained gradient descent
-    L = tf.matrix_solve(
+    L = tf.linalg.solve(
         tf.matmul(T(G), G),
        -tf.matmul(T(G), F)
     )
@@ -60,7 +63,7 @@ def constrained_gradient_descent(obj, con, var, step=0.1):
 
     # correction step (zangwill-garcia)
     # can be non-square so use least squares
-    Ugz = squeeze(tf.matrix_solve_ls(
+    Ugz = squeeze(tf.linalg.lstsq(
         tf.concat([T(G), Ugd[None, :]], 0),
        -tf.concat([g[:, None], [[0.0]]], 0),
         fast=False
@@ -78,6 +81,18 @@ def constrained_gradient_descent(obj, con, var, step=0.1):
     gain = tf.squeeze(tf.matmul(Ugd[None, :], F))
 
     return gd_upds, gz_upds, gain
+
+def lagrange_objective(obj, cons, varz):
+    mult = [tf.Variable(tf.ones_like(c)) for c in cons]
+    lagr = obj + tf.reduce_sum([tf.reduce_sum(m*c) for (m, c) in zip (mult, cons)])
+    lgrd_varz = tf.gradients(lagr, varz)
+    lgrd_mult = tf.gradients(lagr, mult)
+    lobj = tf.nn.l2_loss(lgrd_varz + lgrd_mult)
+    return lobj, mult, lgrd_varz, lgrd_mult
+
+def lagrange_objective2(obj, cons, z):
+    lobj = obj + z*total_loss(cons)
+    return lobj
 
 def newton_solver(con, var):
     # shape info

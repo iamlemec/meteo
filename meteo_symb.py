@@ -345,8 +345,10 @@ class Model:
 
             # store
             t_path.append(tv)
-            par_path.append({p: p.eval() for p in self.pars})
-            var_path.append({v: v.eval() for v in self.vars})
+            for p in self.pars:
+                par_path[p].append(p.eval())
+            for v in self.vars:
+                var_path[v].append(v.eval())
 
             if iout:
                 print('MADE PREDICTION STEP')

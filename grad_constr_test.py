@@ -1,15 +1,17 @@
 import sys
 import tensorflow as tf
 import numpy as np
-from grad_constr import constrained_gradient_descent, newton_solver, flatify
+from grad_constr import lagrange_objective, lagrange_objective2, constrained_gradient_descent, newton_solver, flatify, total_loss
 
 # test
 mod = sys.argv[1]
 
 # algorithm params
-maxiter = 500
+maxiter = 20000
 step = 0.2
+lrate = 0.1
 tol = 1.0e-7
+per = 100
 
 ##
 ## algebraic system
@@ -31,7 +33,7 @@ if mod == 'algebraic':
     c2 = 1.0 - (x+0.5)**2 - (y-0.5)**2 - z**2
 
     # output
-    obj = tf.reduce_mean(x+y+z)
+    obj = -tf.reduce_mean(x+y+z)
     con = [c1, c2]
     var = [x, y, z]
 
@@ -42,60 +44,57 @@ if mod == 'algebraic':
 if mod == 'growth':
     # params
     rho = tf.Variable(0.05)
-    ilam = tf.Variable(0.9)
+    lam = tf.Variable(0.2)
     c = tf.Variable(1.5)
-    eta = tf.Variable(2.2)
-    F = tf.Variable(0.1)
 
     # eq vars
     wt = tf.Variable(0.9)
     vt = tf.Variable(1.1)
-    x = tf.Variable(0.1)
-    e = tf.Variable(0.3)
-    tau = tf.Variable(0.15)
+    tau = tf.Variable(0.12)
     P = tf.Variable(0.8)
     R = tf.Variable(0.2)
 
     # inter
-    C = c*x**eta
-    Cp = c*eta*x**(eta-1.0)
-    pit = 1.0 - ilam
+    pit = lam/(1.0+lam)
 
     # cons
     lmc = P + R - 1.0
     val = (rho+tau)*vt - pit
-    foc = wt*Cp - vt
-    ent = wt*F - (x*vt-wt*C)
-    des = tau - (1.0+e)*x
-    lab = wt*P - ilam
-    res = (1.0+e)*C + e*F
+    ent = wt*c - vt
+    lab = (1.0+lam)*wt*P - 1.0
+    res = R - tau*c
 
     # moments
-    rnd = wt*C
-    grw = -tf.log(ilam)*tau
-    prf = pit - rnd
-    ent = e/(1.0+e)
-    mmt = [rnd-0.1, grw-0.03, prf-0.15, ent-0.3]
-    mvec = flatify(mmt)
+    rnd = c*tau
+    grw = tf.log(1.0+lam)*tau
+    prf = pit
+    mmt_gen = [rnd, grw, prf]
+    mmt_dat = [0.18, 0.022, 0.17]
+    mmt = [g - d for g, d in zip(mmt_gen, mmt_dat)]
 
     # output
-    obj = -tf.reduce_sum(mvec**2)
-    con = [lmc, val, foc, ent, des, lab, res]
-    var = [rho, ilam, c, eta, F, wt, vt, x, e, tau, P, R]
+    obj = total_loss(mmt)
+    con = [lmc, val, ent, lab, res]
+    var = [rho, lam, c, wt, vt, tau, P, R]
 
 # update
-newt = newton_solver(con, var)
-pred, corr, gain = constrained_gradient_descent(obj, con, var, step=step)
+# newt = newton_solver(con, var)
+
+lobj, mult, lgrd_varz, lgrd_mult = lagrange_objective(obj, con, var)
+cgd = tf.train.GradientDescentOptimizer(learning_rate=lrate)
+mini = cgd.minimize(lobj, var_list=var+mult)
+
+# lobj = lagrange_objective2(obj, con, 5.0)
+# cgd = tf.train.GradientDescentOptimizer(learning_rate=lrate)
+# mini = cgd.minimize(lobj, var_list=var)
 
 # constraint error
 cvec = flatify(con)
-cerr = tf.sqrt(tf.reduce_mean(cvec**2))
+cerr = total_loss(con)
 
 # output
 def status(i):
-    print(f'{i:4d}: {obj.eval():10g} {cerr.eval():10g} {gain.eval():10g}')
-
-# with tf.Session() as sess:
+    print(f'{i:4d}: {obj.eval():10g} {cerr.eval():10g}')
 
 sess = tf.InteractiveSession()
 
@@ -103,18 +102,34 @@ print('initializing')
 sess.run(tf.global_variables_initializer())
 status(0)
 
-print('solving')
-for i in range(maxiter):
-    newt.run()
-    status(i)
-    if cerr.eval() < tol:
-        break
+# print('solving')
+# for i in range(maxiter):
+#     newt.run()
+#     status(i)
+#     if cerr.eval() < tol:
+#         print('solved')
+#         break
 
 print('optimizing')
+last_obj = np.inf
 for i in range(maxiter):
-    pred.run()
-    corr.run()
-    if i % 10 == 0: status(i)
-    if gain.eval() < tol:
+    if i % per == 0:
+        status(i)
+
+    mini.run()
+
+    next_obj = obj.eval()
+    diff_obj = next_obj - last_obj
+    last_obj = next_obj
+
+    err = cerr.eval()
+
+    if np.abs(next_obj) < tol and err < tol:
+        print('optimized')
+        status(i)
+        break
+
+    if np.isnan(next_obj) or np.isnan(err):
+        print('failed')
         status(i)
         break
