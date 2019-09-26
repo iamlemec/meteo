@@ -1,0 +1,14 @@
+{
+    "constants": {
+        "alpha": 5.0
+    },
+    "parameters": {
+        "z": 1
+    },
+    "variables": {
+        "x": 1
+    },
+    "equations": {
+        "eq1": "x**2-1+z*(7-alpha*x)"
+    }
+}

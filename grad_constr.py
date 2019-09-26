@@ -82,18 +82,6 @@ def constrained_gradient_descent(obj, con, var, step=0.1):
 
     return gd_upds, gz_upds, gain
 
-def lagrange_objective(obj, cons, varz):
-    mult = [tf.Variable(tf.ones_like(c)) for c in cons]
-    lagr = obj + tf.reduce_sum([tf.reduce_sum(m*c) for (m, c) in zip (mult, cons)])
-    lgrd_varz = tf.gradients(lagr, varz)
-    lgrd_mult = tf.gradients(lagr, mult)
-    lobj = tf.nn.l2_loss(lgrd_varz + lgrd_mult)
-    return lobj, mult, lgrd_varz, lgrd_mult
-
-def lagrange_objective2(obj, cons, z):
-    lobj = obj + z*total_loss(cons)
-    return lobj
-
 def newton_solver(con, var):
     # shape info
     var_shp = [x.get_shape() for x in var]

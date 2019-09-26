@@ -1,4 +1,5 @@
 # meteo with the purest tensorflow (python3.6+)
+# just elevator path without projection then gradient descent
 
 from itertools import chain, islice
 from collections import OrderedDict
