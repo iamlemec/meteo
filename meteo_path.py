@@ -13,6 +13,8 @@ new = np.newaxis
 
 import tensorflow as tf
 
+
+
 # utils
 def ensure_matrix(x):
     if type(x) is np.ndarray and x.ndim >= 2:
@@ -35,6 +37,14 @@ def dict_copy(d):
 def dict_add(d0, d1):
     for k in d1:
         d0[k] += d1[k]
+
+def rename(x, name):
+    return tf.identity(x, name=name)
+
+def summary(d):
+    t = type(d)
+    if t is dict:
+        return {k.name: v for k, v in d.items()}
 
 # HOMPACK90 STYLE
 def row_dets_old(mat):
@@ -127,7 +137,7 @@ class Model:
         self.varjac = tf.concat([tf.concat([jacobian(eqn, x) for x in vars], 1) for eqn in eqns], 0)
 
         # newton steps
-        self.newton_step = -tf.squeeze(tf.matrix_solve(self.varjac, tf.expand_dims(self.eqnvec, 1)))
+        self.newton_step = -tf.squeeze(tf.linalg.solve(self.varjac, tf.expand_dims(self.eqnvec, 1)))
         self.newton_dvars = tf.split(self.newton_step, list(self.var_sz.values()), 0)
         self.newton_update = [tf.assign(v, v+s) for v, s in zip(self.vars, self.newton_dvars)]
 
@@ -135,11 +145,13 @@ class Model:
         self.tpars = [tf.zeros_like(p) for p in pars]
         self.tparvec = tf.concat(self.tpars, 0)
 
-    def eval_system(self, p, v, sess=None):
-        return {eq: eq.eval(feed_dict=dict_merge(p, v)) for eq in self.eqns}
+    def eval_system(self, sess=None):
+        if sess is None:
+            sess = tf.get_default_session()
+        return {eq: sess.run(eq) for eq in self.eqns}
 
     # solve system symbolically
-    def solve_system(self, eqn_tol=1.0e-12, max_rep=20, output=False, sess=None):
+    def solve_system(self, eqn_tol=1.0e-7, max_rep=20, output=False, sess=None):
         if sess is None:
             sess = tf.get_default_session()
 
@@ -162,7 +174,7 @@ class Model:
             if error <= eqn_tol:
                 break
 
-    def homotopy_bde(self, p1, delt=0.01, eqn_tol=1.0e-12, max_step=1000,
+    def homotopy_bde(self, p1, delt=0.01, eqn_tol=1.0e-7, max_step=1000,
                           max_newton=10, out_rep=5, solve=False, output=False,
                           plot=False):
         if solve:
@@ -197,7 +209,7 @@ class Model:
                 print()
 
             # prediction step
-            tdir_val = np.dot(parjac_val, dp)[:, new]
+            tdir_val = np.dot(parjac_val, dp)[:, None]
             fulljac_val = np.hstack([varjac_val, tdir_val])
             step_pred = row_dets(fulljac_val)
 
@@ -248,7 +260,7 @@ class Model:
                 else:
                     proj_dir = step_pred # project along previous step
 
-                dp = dpath_apply(tv)[:, new]
+                dp = dpath_apply(tv)[:, None]
                 varjac_val = self.varjac_fun(p, v)
                 parjac_val = self.parjac_fun(p, v)
                 tdir_val = np.dot(parjac_val, dp)
@@ -284,7 +296,7 @@ class Model:
             # break at end
             if tv <= 0.0 or tv >= 1.0: break
 
-        (t_path, par_path, var_path) = map(np.array, (t_path, par_path, var_path))
+        t_path, par_path, var_path = map(np.array, (t_path, par_path, var_path))
 
         if output:
             print(f'DONE AT {rep}!')
@@ -296,4 +308,4 @@ class Model:
             plt.scatter(var_path[1::2], t_path[1::2], c='r')
             plt.scatter(var_path[::2], t_path[::2], c='b')
 
-        return (t_path, par_path, var_path)
+        return t_path, par_path, var_path
