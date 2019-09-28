@@ -1,19 +1,15 @@
 # meteo with the purest tensorflow (python3.6+)
 
+import re
+import json
 from itertools import chain, islice
 from collections import OrderedDict
 from copy import deepcopy
 
-import re
-import json
-
 import numpy as np
-from scipy.sparse.linalg import spsolve
-new = np.newaxis
-
 import tensorflow as tf
-
-
+from scipy.sparse.linalg import spsolve
+from tools import *
 
 # utils
 def ensure_matrix(x):
@@ -46,65 +42,19 @@ def summary(d):
     if t is dict:
         return {k.name: v for k, v in d.items()}
 
-# HOMPACK90 STYLE
-def row_dets_old(mat):
-    (n, np1) = mat.shape
-    qr = np.linalg.qr(mat, 'r')
-    dets = np.zeros(np1)
-    dets[np1-1] = 1.0
-    for lw in range(2, np1+1):
-            i = np1 - lw
-            ik = i + 1
-            dets[i] = -np.dot(qr[i, ik:], dets[ik:])/qr[i, i]
-    dets *= np.sign(np.prod(np.diag(qr))) # just for the sign
-    #dets *= np.prod(np.diag(qr)) # to get the scale exactly
-    return dets
-
+# HOM-HOM-HOM-HOM HOMPACK90 STYLE
 def row_dets(mat):
-    (n, np1) = mat.shape
-    q, r = tf.qr(mat)
-    dets = np.zeros(np1)
+    n, np1 = mat.shape
+    qr = np.linalg.qr(mat, 'r')
+    dets = np.zeros(np1, dtype=mat.dtype)
     dets[np1-1] = 1.0
     for lw in range(2, np1+1):
-            i = np1 - lw
-            ik = i + 1
-            dets[i] = -np.dot(qr[i, ik:np1], dets[ik:np1])/qr[i, i]
+        i = np1 - lw
+        ik = i + 1
+        dets[i] = -np.dot(qr[i, ik:np1], dets[ik:np1])/qr[i, i]
     dets *= np.sign(np.prod(np.diag(qr))) # just for the sign
-    #dets *= np.prod(np.diag(qr)) # to get the scale exactly
+    # dets *= np.prod(np.diag(qr)) # to get the scale exactly
     return dets
-
-def dict_to_array(din, spec):
-    vout = []
-    for (nm, sz) in spec.items():
-        val = np.real(din[nm])
-        if sz == 1:
-            vout += [val]
-        else:
-            vout += list(val)
-    return np.array(vout)
-
-def array_to_dict(vin, spec):
-    dout = {}
-    loc = 0
-    for (nm, sz) in spec.items():
-        val = vin[loc:loc+sz]
-        if sz == 1:
-            dout[nm] = val[0]
-        else:
-            dout[nm] = val
-        loc += sz
-    return dout
-
-def gradient(eq, i, x):
-    ret = tf.gradients(tf.slice(eq, [i], [1]), x)[0]
-    if ret is None:
-        return tf.zeros_like(x)
-    else:
-        return ret
-
-def jacobian(eq, x):
-    n = eq.get_shape()[0]
-    return tf.stack([gradient(eq, i, x) for i in range(n)], 0)
 
 def varname(nm):
     if ':' in nm: nm = ''.join(nm.split(':')[:-1])
@@ -116,51 +66,57 @@ def resolve(d):
 
 # TODO: handle non-flat inputs
 class Model:
-    def __init__(self, pars, vars, eqns):
+    def __init__(self, pars, vars, eqns, dtype=np.float32):
         self.pars = pars
         self.vars = vars
         self.eqns = eqns
+        self.dtype = dtype
 
-        # size
-        self.par_sz = {par: int(par.get_shape()[0]) for par in pars}
-        self.var_sz = {var: int(var.get_shape()[0]) for var in vars}
-        self.eqn_sz = {eqn: int(eqn.get_shape()[0]) for eqn in eqns}
+        # shape
+        self.par_sh = [p.get_shape() for p in self.pars]
+        self.var_sh = [v.get_shape() for v in self.vars]
+        self.eqn_sh = [e.get_shape() for e in self.eqns]
+
+        # total size
+        self.par_sz = sum([prod(s) for s in self.par_sh])
+        self.var_sz = sum([prod(s) for s in self.var_sh])
+        self.eqn_sz = sum([prod(s) for s in self.eqn_sh])
 
         # equation system
-        self.parvec = tf.concat(pars, 0)
-        self.varvec = tf.concat(vars, 0)
-        self.eqnvec = tf.concat(eqns, 0)
+        self.parvec = flatify(self.pars)
+        self.varvec = flatify(self.vars)
+        self.eqnvec = flatify(self.eqns)
         self.error = tf.reduce_max(tf.abs(self.eqnvec))
 
         # gradients
-        self.parjac = tf.concat([tf.concat([jacobian(eqn, x) for x in pars], 1) for eqn in eqns], 0)
-        self.varjac = tf.concat([tf.concat([jacobian(eqn, x) for x in vars], 1) for eqn in eqns], 0)
+        self.parjac = jacobian(self.eqnvec, self.pars)
+        self.varjac = jacobian(self.eqnvec, self.vars)
 
         # newton steps
-        self.newton_step = -tf.squeeze(tf.linalg.solve(self.varjac, tf.expand_dims(self.eqnvec, 1)))
-        self.newton_dvars = tf.split(self.newton_step, list(self.var_sz.values()), 0)
-        self.newton_update = [tf.assign(v, v+s) for v, s in zip(self.vars, self.newton_dvars)]
+        self.newton = newton_step(self.eqnvec, self.vars, jac=self.varjac)
 
         # target param
-        self.tpars = [tf.zeros_like(p) for p in pars]
-        self.tparvec = tf.concat(self.tpars, 0)
+        self.par0 = [tf.zeros_like(p) for p in self.pars]
+        self.par1 = [tf.zeros_like(p) for p in self.pars]
+        self.t = tf.Variable(0.0, name='dt')
+        self.path = [self.t*p1 + (1-self.t)*p0 for p0, p1 in zip(self.par0, self.par1)]
+        self.update_path = assign(self.pars, self.path)
+
+    def set_params(self, pars, sess=None):
+        par_list = [pars[p] for p in self.pars]
+        sess.run(assign(self.pars, par_list))
 
     def eval_system(self, sess=None):
-        if sess is None:
-            sess = tf.get_default_session()
         return {eq: sess.run(eq) for eq in self.eqns}
 
     # solve system symbolically
     def solve_system(self, eqn_tol=1.0e-7, max_rep=20, output=False, sess=None):
-        if sess is None:
-            sess = tf.get_default_session()
-
         if output:
             error = self.error.eval()
             print(f'error({0}) = {error}')
 
         for i in range(max_rep):
-            sess.run(self.newton_update)
+            sess.run(self.newton)
             error = self.error.eval()
 
             if output:
@@ -174,32 +130,32 @@ class Model:
             if error <= eqn_tol:
                 break
 
-    def homotopy_bde(self, p1, delt=0.01, eqn_tol=1.0e-7, max_step=1000,
-                          max_newton=10, out_rep=5, solve=False, output=False,
-                          plot=False):
+    def homotopy_path(self, par, delt=0.01, eqn_tol=1.0e-7, max_step=1000,
+                      max_newton=10, out_rep=5, solve=False, output=False,
+                      plot=False, sess=None):
         if solve:
-            print('SOLVING SYSTEM')
+            if output: print('SOLVING SYSTEM')
             self.solve_system(output=output)
 
         # generate analytic homotopy paths
-        p0_vec = self.parvec.eval()
-        p1_vec = dict_to_array(p1, self.par_sz)
-        path = lambda t: (1-t)*p0 + t*p1
-        dpath = p1_vec - p0_vec
+        par0 = sess.run(self.pars)
+        var0 = sess.run(self.vars)
+        par1 = [self.dtype(par[p]) for p in self.pars]
+        dp = np.concat([(p1-p0).flatten() for p0, p1 in zip(par0, par1)]) # assuming linear path
 
-        # start path
-        tv = 0.0
+        # initalize
+        t = 0.0
 
         if output:
-            print(f't = {tv}')
-            error = self.error.eval()
+            print(f't = {t}')
+            err = self.error.eval()
             print(f'error = {err}')
             print()
 
         # save path
-        t_path = [tv]
-        par_path = [dict_copy(p0)]
-        var_path = [dict_copy(v)]
+        t_path = [t]
+        par_path = [par0]
+        var_path = [var0]
 
         direc = None
         for rep in range(max_step):
@@ -209,6 +165,8 @@ class Model:
                 print()
 
             # prediction step
+            parjac_val = sess.run(self.parjac)
+            varjac_val = sess.run(self.varjac)
             tdir_val = np.dot(parjac_val, dp)[:, None]
             fulljac_val = np.hstack([varjac_val, tdir_val])
             step_pred = row_dets(fulljac_val)
@@ -216,7 +174,7 @@ class Model:
             if np.mean(np.abs(step_pred)) == 0.0:
                 # elevator step
                 step_pred[:] = np.zeros_like(step_pred)
-                step_pred[-1] = np.minimum(delt, 1.0-tv)
+                step_pred[-1] = np.minimum(delt, 1.0-t)
                 direc = None
             else:
                 # move in the right direction
@@ -228,65 +186,72 @@ class Model:
                 step_pred *= delt/np.mean(np.abs(step_pred))
 
                 # bound between [0,1] and limit step size
-                delt_max = np.minimum(delt, 1.0-tv)
-                delt_min = np.maximum(-delt, -tv)
+                delt_max = np.minimum(delt, 1.0-t)
+                delt_min = np.maximum(-delt, -t)
                 if step_pred[-1] > delt_max: step_pred *= delt_max/step_pred[-1]
                 if step_pred[-1] < delt_min: step_pred *= delt_min/step_pred[-1]
 
             # increment
-            tv += step_pred[-1]
-            dict_add(v, array_to_dict(step_pred[:-1], self.var_sz))
+            dt = step_pred[-1]
+            dv = unpack(step_pred[:-1], self.var_sh)
 
-            # new function value
-            p = path_apply(tv)
-            eqnvec_val = self.eqnvec_fun(p, v)
-            err = np.max(np.abs(eqnvec_val))
+            # implement
+            t += dt
+            sess.run(increment(self.pars, dp, d=dt))
+            sess.run(increment(self.vars, dv))
 
             # store
-            t_path.append(tv)
-            par_path.append(dict_copy(p))
-            var_path.append(dict_copy(v))
+            t_path.append(t)
+            par_path.append(sess.run(self.pars))
+            var_path.append(sess.run(self.vars))
 
             if iout:
                 print('MADE PREDICTION STEP')
-                print(f't = {tv}')
+                print(f't = {t}')
+                err = self.error.eval()
                 print(f'error = {err}')
                 print()
 
             # correction steps
             for i in range(max_newton):
-                if tv == 0.0 or tv == 1.0:
-                    proj_dir = np.r_[np.zeros(sum(self.var_sz.values())), 1.0]
+                if t == 0.0 or t == 1.0:
+                    proj_dir = np.r_[np.zeros(self.var_sz), 1.0]
                 else:
                     proj_dir = step_pred # project along previous step
 
-                dp = dpath_apply(tv)[:, None]
-                varjac_val = self.varjac_fun(p, v)
-                parjac_val = self.parjac_fun(p, v)
-                tdir_val = np.dot(parjac_val, dp)
+                # get refinement step
+                parjac_val = sess.run(self.parjac)
+                varjac_val = sess.run(self.varjac)
+                eqnvec_val = sess.run(self.eqnvec)
 
+                tdir_val = np.dot(parjac_val, dp)[:, None]
                 fulljac_val = np.hstack([varjac_val, tdir_val])
                 projjac_val = np.vstack([fulljac_val, proj_dir])
                 step_corr = -np.linalg.solve(projjac_val, np.r_[eqnvec_val, 0.0])
 
-                tv += step_corr[-1]
-                p = path_apply(tv)
-                dict_add(v, array_to_dict(step_corr[:-1], self.var_sz))
-                eqnvec_val = self.eqnvec_fun(p, v)
-                err = np.max(np.abs(eqnvec_val))
+                # increment
+                dt = step_corr[-1]
+                dv = unpack(step_corr[:-1], self.var_sh)
 
+                # implement
+                t += dt
+                sess.run(increment(self.pars, dp, d=dt))
+                sess.run(increment(self.vars, dv))
+
+                # check for convergence
+                err = self.error.eval()
                 if err <= eqn_tol: break
 
             if iout:
                 print(f'MADE {i} CORRECTION STEPS')
-                print(f't = {tv}')
+                print(f't = {t}')
                 print(f'error = {err}')
                 print()
 
             # store
-            t_path.append(tv)
-            par_path.append(dict_copy(p))
-            var_path.append(dict_copy(v))
+            t_path.append(t)
+            par_path.append(sess.run(self.pars))
+            var_path.append(sess.run(self.vars))
 
             # if we can't stay on the path
             if (err > eqn_tol) or np.isnan(eqnvec_val).any():
@@ -294,18 +259,11 @@ class Model:
                 break
 
             # break at end
-            if tv <= 0.0 or tv >= 1.0: break
-
-        t_path, par_path, var_path = map(np.array, (t_path, par_path, var_path))
+            if t <= 0.0 or t >= 1.0: break
 
         if output:
             print(f'DONE AT {rep}!')
-            print(f't = {tv}')
+            print(f't = {t}')
             print(f'error = {err}')
-
-        if plot:
-            import matplotlib.pylab as plt
-            plt.scatter(var_path[1::2], t_path[1::2], c='r')
-            plt.scatter(var_path[::2], t_path[::2], c='b')
 
         return t_path, par_path, var_path

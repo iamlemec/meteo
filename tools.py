@@ -23,8 +23,11 @@ def unpack(a, sh):
     sz = [prod(s) for s in sh]
     return [tf.reshape(x, s) for x, s in zip(tf.split(a, sz), sh)]
 
-def increment(a, b):
-    return tf.group(*[x.assign_add(u) for x, u in zip(a, b)])
+def assign(a, b):
+    return tf.group(*[x.assign(u) for x, u in zip(a, b)])
+
+def increment(a, b, d=1):
+    return tf.group(*[x.assign_add(d*u) for x, u in zip(a, b)])
 
 def grad(a, b):
     for x in b:
@@ -34,11 +37,34 @@ def grad(a, b):
 def total_loss(vec):
     return tf.reduce_sum([tf.nn.l2_loss(v) for v in vec])
 
-# dim 0: inputs
-# dim 1: outputs
+# a: tensor
+# b: list of variables
+# out: [inputs, outputs]
 def jacobian(a, b):
     n = size(a)
     if n > 1:
-        return tf.stack([flatify(grad(a[i], b)) for i in range(n)], axis=1)
+        return tf.stack([flatify(grad(a[i], b)) for i in range(n)], 1)
     else:
-        return tf.stack([flatify(grad(a, b))], axis=1)
+        return tf.stack([flatify(grad(a, b))], 1)
+
+# one step in newton's method
+# eqn: tensor
+# var: list of variables
+def newton_step(eqn, var, jac=None):
+    # shape info
+    var_shp = [x.get_shape() for x in var]
+
+    # derivatives
+    if jac is None:
+        jac = jacobian(eqn, var)
+
+    # can be non-square so use least squares
+    step = squeeze(tf.linalg.lstsq(T(jac), -eqn[:, None], fast=False))
+
+    # updates
+    diffs = unpack(step, var_shp)
+
+    # operators
+    upds = increment(var, diffs)
+
+    return upds
