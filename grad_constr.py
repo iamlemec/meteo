@@ -2,43 +2,59 @@ import tensorflow as tf
 import numpy as np
 from tools import *
 
-# N: number of vars
 # M: number of cons
-# G: N x M
+# N: number of vars
+# G: M x N
 # F: N x 1
-def constrained_gradient_descent(obj, con, var, step=0.1):
+def constrained_gradient_descent(obj, con, var, step=0.1, tol=1e-5, max_iter=100, corr_steps=1, output=False):
     # shape info
-    var_shp = [x.get_shape() for x in var]
+    var_shp = [shape(x) for x in var]
 
-    # derivatives
-    g = flatify(con)
-    F = jacobian(obj, var)
-    G = jacobian(g, var)
+    for i in range(max_iter):
+        # derivatives
+        g = flatify(con()).numpy()
+        G = jacobian(con, var).numpy()
+        F = gradient(obj, var).numpy()
 
-    # constrained gradient descent
-    L = tf.linalg.solve(
-        tf.matmul(T(G), G),
-       -tf.matmul(T(G), F)
-    )
-    Ugd = step*squeeze(F + tf.matmul(G, L))
+        # constrained gradient descent
+        L = np.linalg.solve(
+            np.matmul(G, G.T),
+           -np.dot(G, F)
+        )
+        grad = step*(F + np.dot(G.T, L))
+        gain = np.dot(grad, F)
 
-    # correction step (zangwill-garcia)
-    # can be non-square so use least squares
-    Ugz = squeeze(tf.linalg.lstsq(
-        tf.concat([T(G), Ugd[None, :]], 0),
-       -tf.concat([g[:, None], [[0.0]]], 0),
-        fast=False
-    ))
+        # increment
+        grad_diffs = unpack(grad, var_shp)
+        increment(var, grad_diffs)
 
-    # updates
-    gd_diffs = unpack(Ugd, var_shp)
-    gz_diffs = unpack(Ugz, var_shp)
+        # derivatives
+        g = flatify(con()).numpy()
+        G = jacobian(con, var).numpy()
 
-    # operators
-    gd_upds = increment(var, gd_diffs)
-    gz_upds = increment(var, gz_diffs)
+        # correction step (zangwill-garcia), can be non-square so use least squares
+        corr = lstsq(
+            np.vstack([G, grad[None, :]]),
+           -np.r_[g, 0.0]
+        )
 
-    # slope
-    gain = tf.squeeze(tf.matmul(Ugd[None, :], F))
+        # increment
+        corr_diffs = unpack(corr, var_shp)
+        increment(var, corr_diffs)
 
-    return gd_upds, gz_upds, gain
+        # derivatives
+        g = flatify(con()).numpy()
+
+        # error
+        move = np.max(np.abs(gain))
+        err = np.max(np.abs(g))
+
+        # output
+        if output and i % 10 == 0:
+            print(f'{i:4d}: move = {move:7.5f}, err = {err:7.5f}')
+
+        # convergence
+        if move < tol and err < tol:
+            if output:
+                print(f' FIN: move = {move:7.5f}, err = {err:7.5f}')
+            break

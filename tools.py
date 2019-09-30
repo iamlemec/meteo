@@ -10,8 +10,11 @@ T = tf.transpose
 def prod(a):
     return reduce(mul, [int(x) for x in a], 1)
 
+def shape(a):
+    return a.get_shape().as_list()
+
 def size(a):
-    return prod(a.get_shape())
+    return prod(shape(a))
 
 def squeeze(a):
     return tf.reshape(a, [-1])
@@ -19,9 +22,13 @@ def squeeze(a):
 def flatify(a):
     return tf.concat([squeeze(x) for x in a], 0)
 
+# def unpack(a, sh):
+#     sz = [prod(s) for s in sh]
+#     return [tf.reshape(x, s) for x, s in zip(tf.split(a, sz), sh)]
+
 def unpack(a, sh):
-    sz = [prod(s) for s in sh]
-    return [tf.reshape(x, s) for x, s in zip(tf.split(a, sz), sh)]
+    sz = np.cumsum([prod(s) for s in sh])
+    return [np.reshape(x, s) for x, s in zip(np.split(a, sz), sh)]
 
 def assign(a, b):
     return tf.group(*[x.assign(u) for x, u in zip(a, b)])
@@ -37,34 +44,43 @@ def grad(a, b):
 def total_loss(vec):
     return tf.reduce_sum([tf.nn.l2_loss(v) for v in vec])
 
-# a: tensor
-# b: list of variables
-# out: [inputs, outputs]
-def jacobian(a, b):
-    n = size(a)
-    if n > 1:
-        return tf.stack([flatify(grad(a[i], b)) for i in range(n)], 1)
-    else:
-        return tf.stack([flatify(grad(a, b))], 1)
+def rename(x, name):
+    return tf.identity(x, name=name)
 
-# one step in newton's method
-# eqn: tensor
-# var: list of variables
-def newton_step(eqn, var, jac=None):
-    # shape info
-    var_shp = [x.get_shape() for x in var]
+def varname(nm):
+    if ':' in nm: nm = ''.join(nm.split(':')[:-1])
+    if '_' in nm: nm = ''.join(nm.split('_')[:-1])
+    return nm
 
-    # derivatives
-    if jac is None:
-        jac = jacobian(eqn, var)
+def summary(d):
+    t = type(d)
+    if t is dict:
+        return {k.name: v for k, v in d.items()}
 
-    # can be non-square so use least squares
-    step = squeeze(tf.linalg.lstsq(T(jac), -eqn[:, None], fast=False))
+# y: function
+# xs: list of variables
+# out: [outputs, inputs]
+def gradient(y, xs):
+    with tf.GradientTape() as t:
+        val = y()
+    sz_x = [size(x) for x in xs]
+    grd = t.gradient(val, xs, unconnected_gradients='zero')
+    grd = [tf.reshape(g, [m]) for g, m in zip(grd, sz_x)]
+    return tf.concat(grd, 0)
 
-    # updates
-    diffs = unpack(step, var_shp)
+# y: model function
+# xs: list of variables
+# out: [outputs, inputs]
+def jacobian(y, xs):
+    with tf.GradientTape() as t:
+        ys = y()
+        vec = flatify(ys)
+    sz_y = [size(z) for z in ys]
+    sz_x = [size(z) for z in xs]
+    n = sum(sz_y)
+    jac = t.jacobian(vec, xs, unconnected_gradients='zero')
+    jac = [tf.reshape(j, [n, m]) for j, m in zip(jac, sz_x)]
+    return tf.concat(jac, 1)
 
-    # operators
-    upds = increment(var, diffs)
-
-    return upds
+def lstsq(A, b):
+    return np.linalg.lstsq(A, b, rcond=None)[0]

@@ -11,37 +11,6 @@ import tensorflow as tf
 from scipy.sparse.linalg import spsolve
 from tools import *
 
-# utils
-def ensure_matrix(x):
-    if type(x) is np.ndarray and x.ndim >= 2:
-        return x
-    else:
-        return np.array(x, ndmin=2)
-
-def inv(vec):
-    if vec.ndim == 2:
-        return np.linalg.inv(vec)
-    elif vec.ndim == 0 or (vec.ndim == 1 and vec.size == 1):
-            return 1.0/vec
-
-def dict_merge(*dlist):
-    return dict(chain(*[d.items() for d in dlist]))
-
-def dict_copy(d):
-    return {k: np.copy(d[k]) for k in d}
-
-def dict_add(d0, d1):
-    for k in d1:
-        d0[k] += d1[k]
-
-def rename(x, name):
-    return tf.identity(x, name=name)
-
-def summary(d):
-    t = type(d)
-    if t is dict:
-        return {k.name: v for k, v in d.items()}
-
 # HOM-HOM-HOM-HOM HOMPACK90 STYLE
 def row_dets(mat):
     n, np1 = mat.shape
@@ -56,15 +25,6 @@ def row_dets(mat):
     # dets *= np.prod(np.diag(qr)) # to get the scale exactly
     return dets
 
-def varname(nm):
-    if ':' in nm: nm = ''.join(nm.split(':')[:-1])
-    if '_' in nm: nm = ''.join(nm.split('_')[:-1])
-    return nm
-
-def resolve(d):
-    return {varname(v.name): d[v] for v in d}
-
-# TODO: handle non-flat inputs
 class Model:
     def __init__(self, pars, vars, eqns, dtype=np.float32):
         self.pars = pars
@@ -75,49 +35,54 @@ class Model:
         # shape
         self.par_sh = [p.get_shape() for p in self.pars]
         self.var_sh = [v.get_shape() for v in self.vars]
-        self.eqn_sh = [e.get_shape() for e in self.eqns]
 
         # total size
         self.par_sz = sum([prod(s) for s in self.par_sh])
         self.var_sz = sum([prod(s) for s in self.var_sh])
-        self.eqn_sz = sum([prod(s) for s in self.eqn_sh])
 
-        # equation system
-        self.parvec = flatify(self.pars)
-        self.varvec = flatify(self.vars)
-        self.eqnvec = flatify(self.eqns)
-        self.error = tf.reduce_max(tf.abs(self.eqnvec))
+    def set_params(self, par):
+        for p in par:
+            p.assign(par[p])
 
-        # gradients
-        self.parjac = jacobian(self.eqnvec, self.pars)
-        self.varjac = jacobian(self.eqnvec, self.vars)
+    def get_params(self):
+        return [p.numpy() for p in self.pars]
 
-        # newton steps
-        self.newton = newton_step(self.eqnvec, self.vars, jac=self.varjac)
+    def get_eqvars(self):
+        return [v.numpy() for v in self.vars]
 
-        # target param
-        self.par0 = [tf.zeros_like(p) for p in self.pars]
-        self.par1 = [tf.zeros_like(p) for p in self.pars]
-        self.t = tf.Variable(0.0, name='dt')
-        self.path = [self.t*p1 + (1-self.t)*p0 for p0, p1 in zip(self.par0, self.par1)]
-        self.update_path = assign(self.pars, self.path)
+    def eqnvec(self):
+        return flatify(self.eqns()).numpy()
 
-    def set_params(self, pars, sess=None):
-        par_list = [pars[p] for p in self.pars]
-        sess.run(assign(self.pars, par_list))
+    def parjac(self):
+        return jacobian(self.eqns, self.pars).numpy()
 
-    def eval_system(self, sess=None):
-        return {eq: sess.run(eq) for eq in self.eqns}
+    def varjac(self):
+        return jacobian(self.eqns, self.vars).numpy()
 
     # solve system symbolically
-    def solve_system(self, eqn_tol=1.0e-7, max_rep=20, output=False, sess=None):
+    def solve_system(self, eqn_tol=1.0e-6, max_rep=20, output=False):
         if output:
-            error = self.error.eval()
+            eqnvec = self.eqnvec()
+            error = np.max(np.abs(eqnvec))
             print(f'error({0}) = {error}')
 
         for i in range(max_rep):
-            sess.run(self.newton)
-            error = self.error.eval()
+            # get input values
+            eqnvec = self.eqnvec()
+            varjac = self.varjac()
+
+            # can be non-square so use least squares
+            step = lstsq(varjac, -eqnvec)
+
+            # updates
+            diffs = unpack(step, self.var_sh)
+
+            # operators
+            upds = increment(self.vars, diffs)
+
+            # convergence
+            eqnvec = self.eqnvec()
+            error = np.max(np.abs(eqnvec))
 
             if output:
                 print(f'error({i+1}) = {error}')
@@ -131,24 +96,26 @@ class Model:
                 break
 
     def homotopy_path(self, par, delt=0.01, eqn_tol=1.0e-7, max_step=1000,
-                      max_newton=10, out_rep=5, solve=False, output=False,
-                      plot=False, sess=None):
+                      max_newton=10, out_rep=5, solve=False, output=False):
         if solve:
             if output: print('SOLVING SYSTEM')
             self.solve_system(output=output)
+            if output: print('SYSTEM SOLVED\n')
 
         # generate analytic homotopy paths
-        par0 = sess.run(self.pars)
-        var0 = sess.run(self.vars)
-        par1 = [self.dtype(par[p]) for p in self.pars]
-        dp = np.concat([(p1-p0).flatten() for p0, p1 in zip(par0, par1)]) # assuming linear path
+        par0 = self.get_params()
+        var0 = self.get_eqvars()
+        par1 = [self.dtype(p) for p in par]
+        dp = [p1-p0 for p0, p1 in zip(par0, par1)] # assuming linear path
+        dpv = np.concat(dp)
 
         # initalize
         t = 0.0
 
         if output:
             print(f't = {t}')
-            err = self.error.eval()
+            eqnvec_val = self.eqnvec()
+            err = np.max(np.abs(eqnvec_val))
             print(f'error = {err}')
             print()
 
@@ -165,10 +132,10 @@ class Model:
                 print()
 
             # prediction step
-            parjac_val = sess.run(self.parjac)
-            varjac_val = sess.run(self.varjac)
-            tdir_val = np.dot(parjac_val, dp)[:, None]
-            fulljac_val = np.hstack([varjac_val, tdir_val])
+            parjac_val = self.parjac()
+            varjac_val = self.varjac()
+            tdir_val = np.dot(parjac_val, dpv)
+            fulljac_val = np.hstack([varjac_val, tdir_val[:, None]])
             step_pred = row_dets(fulljac_val)
 
             if np.mean(np.abs(step_pred)) == 0.0:
@@ -197,18 +164,19 @@ class Model:
 
             # implement
             t += dt
-            sess.run(increment(self.pars, dp, d=dt))
-            sess.run(increment(self.vars, dv))
+            increment(self.pars, dp, d=dt)
+            increment(self.vars, dv)
 
             # store
             t_path.append(t)
-            par_path.append(sess.run(self.pars))
-            var_path.append(sess.run(self.vars))
+            par_path.append(self.get_params())
+            var_path.append(self.get_eqvars())
 
             if iout:
                 print('MADE PREDICTION STEP')
                 print(f't = {t}')
-                err = self.error.eval()
+                eqnvec_val = self.eqnvec()
+                err = np.max(np.abs(eqnvec_val))
                 print(f'error = {err}')
                 print()
 
@@ -220,12 +188,12 @@ class Model:
                     proj_dir = step_pred # project along previous step
 
                 # get refinement step
-                parjac_val = sess.run(self.parjac)
-                varjac_val = sess.run(self.varjac)
-                eqnvec_val = sess.run(self.eqnvec)
+                parjac_val = self.parjac()
+                varjac_val = self.varjac()
+                eqnvec_val = self.eqnvec()
 
-                tdir_val = np.dot(parjac_val, dp)[:, None]
-                fulljac_val = np.hstack([varjac_val, tdir_val])
+                tdir_val = np.dot(parjac_val, dpv)
+                fulljac_val = np.hstack([varjac_val, tdir_val[:, None]])
                 projjac_val = np.vstack([fulljac_val, proj_dir])
                 step_corr = -np.linalg.solve(projjac_val, np.r_[eqnvec_val, 0.0])
 
@@ -235,11 +203,12 @@ class Model:
 
                 # implement
                 t += dt
-                sess.run(increment(self.pars, dp, d=dt))
-                sess.run(increment(self.vars, dv))
+                increment(self.pars, dp, d=dt)
+                increment(self.vars, dv)
 
                 # check for convergence
-                err = self.error.eval()
+                eqnvec_val = self.eqnvec()
+                err = np.max(np.abs(eqnvec_val))
                 if err <= eqn_tol: break
 
             if iout:
@@ -250,8 +219,8 @@ class Model:
 
             # store
             t_path.append(t)
-            par_path.append(sess.run(self.pars))
-            var_path.append(sess.run(self.vars))
+            par_path.append(self.get_params())
+            var_path.append(self.get_eqvars())
 
             # if we can't stay on the path
             if (err > eqn_tol) or np.isnan(eqnvec_val).any():
