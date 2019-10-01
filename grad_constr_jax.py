@@ -4,6 +4,7 @@ np.concat = np.concatenate
 from operator import mul
 from functools import reduce
 import numpy as np0
+import inspect
 
 # reshaping
 
@@ -15,13 +16,19 @@ def boxify(a):
 
 # jax wrappers
 
+def get_args(f):
+    return inspect.getfullargspec(f)[0]
+
+def get_nargs(f):
+    return len(get_args(f))
+
 def fastvec(f):
     v = lambda *x: flatify(f(*x))
     return jit(v)
 
 def fastjac(f, argnums=None):
     if argnums is None:
-        narg = f.__code__.co_argcount
+        narg = get_nargs(f)
         argnums = range(narg)
     j0 = jacobian(f, argnums=argnums)
     j = lambda *x: boxify(j0(*x))
@@ -29,7 +36,7 @@ def fastjac(f, argnums=None):
 
 def fastgrad(f, argnums=None):
     if argnums is None:
-        narg = f.__code__.co_argcount
+        narg = get_nargs(f)
         argnums = range(narg)
     g0 = grad(f, argnums=argnums)
     g = lambda *x: np.concat(g0(*x))
@@ -59,8 +66,8 @@ def lstsq(A, b):
 # F: N x 1
 def constrained_gradient_descent(obj, con, var, step=0.1, tol=1e-5, max_iter=100, corr_steps=1, output=False):
     # these need to align
-    vnames = obj.__code__.co_varnames
-    vnames_con = con.__code__.co_varnames
+    vnames = get_args(obj)
+    vnames_con = get_args(con)
     assert(vnames == vnames_con)
 
     # map dictionary
