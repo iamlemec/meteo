@@ -76,11 +76,84 @@ def bound(v, vmin, vmax):
 def lstsq(A, b):
     return np0.linalg.lstsq(A, b, rcond=None)[0]
 
+##
+## gradient descent (unconstrained)
+##
+
+# N: number of vars
+# F: N x 1
+def gradient_descent(obj, var, vmin={}, vmax={}, vnames=None, step=0.1, tol=1e-5, max_iter=1000, output=False):
+    # map dictionary
+    if vnames is None:
+        vnames = get_args(obj)
+    argnums = range(len(vnames))
+    var = [arrayify(var[n]) for n in vnames]
+    vshp = [x.shape for x in var]
+
+    # bounds
+    vmin = [vmin.get(n, None) for n in vnames]
+    vmax = [vmax.get(n, None) for n in vnames]
+
+    # jax magic
+    f_fun = jit(obj)
+    F_fun = fastgrad(obj, argnums=argnums)
+
+    for rep in range(max_iter):
+        # derivatives
+        F = F_fun(*var)
+
+        if np.isnan(F).any():
+            print(f'{rep:4d}: encountered invalid values')
+            break
+
+        grad = -step*F
+        gain = np.dot(grad, F)
+
+        # increment with bounds
+        diffs = unpack(grad, vshp)
+        increment(var, diffs)
+        bound(var, vmin, vmax)
+
+        # values
+        f = f_fun(*var)
+
+        # error
+        move = np.max(np.abs(gain))
+
+        # output
+        if output and rep % 100 == 0:
+            print(f'{rep:4d}: val = {f:7.5f}')
+
+        # convergence
+        if move < tol:
+            if output:
+                print(f'{rep:4d}: val = {f:7.5f}')
+            break
+
+    # return solution
+    var1 = [scalarify(x) for x in var]
+    return {n: v for n, v in zip(vnames, var1)}
+
+##
+## least squares solver
+##
+
+l2_norm = lambda x: np.sum(x*x)
+
+def gradient_lstsq(eqn, var, **kwargs):
+    vnames = get_args(eqn)
+    obj2 = lambda *x: l2_norm(flatify(eqn(*x)))
+    return gradient_descent(obj2, var, vnames=vnames, **kwargs)
+
+##
+## constrained gradient descent
+##
+
 # M: number of cons
 # N: number of vars
 # G: M x N
 # F: N x 1
-def constrained_gradient_descent(obj, con, var, vmin={}, vmax={}, step=0.1, tol=1e-5, max_iter=1000, corr_steps=1, output=False):
+def constrained_gradient_descent(obj, con, var, vmin={}, vmax={}, step=0.1, tol=1e-5, max_iter=1000, output=False):
     # these need to align
     vnames = get_args(obj)
     vnames_con = get_args(con)
@@ -115,7 +188,7 @@ def constrained_gradient_descent(obj, con, var, vmin={}, vmax={}, step=0.1, tol=
             np.matmul(G, G.T),
            -np.dot(G, F)
         )
-        grad = step*(F + np.dot(G.T, L))
+        grad = -step*(F + np.dot(G.T, L))
         gain = np.dot(grad, F)
 
         # increment with bounds
