@@ -14,6 +14,15 @@ def flatify(a):
 def boxify(a):
     return np.vstack([np.hstack(z) for z in a])
 
+def arrayify(x):
+    return np.array(x, ndmin=1)
+
+def scalarify(x):
+    if x.size == 1:
+        return np0.asscalar(x)
+    else:
+        return np0.array(x)
+
 # jax wrappers
 
 def get_args(f):
@@ -71,14 +80,14 @@ def lstsq(A, b):
 # N: number of vars
 # G: M x N
 # F: N x 1
-def constrained_gradient_descent(obj, con, var, vmin={}, vmax={}, step=0.1, tol=1e-5, max_iter=100, corr_steps=1, output=False):
+def constrained_gradient_descent(obj, con, var, vmin={}, vmax={}, step=0.1, tol=1e-5, max_iter=1000, corr_steps=1, output=False):
     # these need to align
     vnames = get_args(obj)
     vnames_con = get_args(con)
     assert(vnames == vnames_con)
 
     # map dictionary
-    var = [var[n] for n in vnames]
+    var = [arrayify(var[n]) for n in vnames]
     vmin = [vmin.get(n, None) for n in vnames]
     vmax = [vmax.get(n, None) for n in vnames]
 
@@ -152,4 +161,5 @@ def constrained_gradient_descent(obj, con, var, vmin={}, vmax={}, step=0.1, tol=
             break
 
     # return solution
-    return {n: v for n, v in zip(vnames, var)}
+    var1 = [scalarify(x) for x in var]
+    return {n: v for n, v in zip(vnames, var1)}
